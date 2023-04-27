@@ -1,3 +1,11 @@
+
+
+# Fork of [Bazel](https://bazel.build)
+Changes from main branch:
+* Do not remove the `.git` directory in `_git_repostiry_implementation` so git commands can be applied to external git repositories
+
+---
+
 # [Bazel](https://bazel.build)
 
 *{Fast, Correct} - Choose two*
