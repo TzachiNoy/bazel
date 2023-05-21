@@ -51,11 +51,11 @@ def workspace_and_buildfile(ctx):
         ctx.fail("Only one of workspace_file and workspace_file_content can be provided.")
 
     if ctx.attr.workspace_file:
-        ctx.file("WORKSPACE", ctx.read(ctx.attr.workspace_file))
+        ctx.file("WORKSPACE.bazel", ctx.read(ctx.attr.workspace_file))
     elif ctx.attr.workspace_file_content:
-        ctx.file("WORKSPACE", ctx.attr.workspace_file_content)
+        ctx.file("WORKSPACE.bazel", ctx.attr.workspace_file_content)
     else:
-        ctx.file("WORKSPACE", "workspace(name = \"{name}\")\n".format(name = ctx.name))
+        ctx.file("WORKSPACE.bazel", "workspace(name = \"{name}\")\n\nfail(\"Running bazel from external repository is not supported\")\n".format(name = ctx.name))
 
     if ctx.attr.build_file:
         ctx.file("BUILD.bazel", ctx.read(ctx.attr.build_file))
