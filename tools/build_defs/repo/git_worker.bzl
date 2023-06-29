@@ -45,17 +45,9 @@ def git_repo(ctx, directory):
         commit: Actual HEAD commit of the checked out data.
         shallow_since: Actual date and time of the HEAD commit of the checked out data.
     """
-    if ctx.attr.shallow_since:
-        if ctx.attr.tag:
-            fail("shallow_since not allowed if a tag is specified; --depth=1 will be used for tags")
-        if ctx.attr.branch:
-            fail("shallow_since not allowed if a branch is specified; --depth=1 will be used for branches")
 
-    # Use shallow-since if given
-    if ctx.attr.shallow_since:
-        shallow = "--shallow-since=%s" % ctx.attr.shallow_since
-    else:
-        shallow = "--depth=1"
+    # ignore shallow_since, clone with --depth=1
+    shallow = "--depth=1"
 
     reset_ref = ""
     fetch_ref = ""

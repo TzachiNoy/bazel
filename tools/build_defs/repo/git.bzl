@@ -55,6 +55,10 @@ def _update_git_attrs(orig, keys, override):
     if "commit" in result:
         result.pop("tag", None)
         result.pop("branch", None)
+
+    # ignore shallow_since as we ignore it
+    if getattr(orig, "shallow_since") != None:
+        result["shallow_since"] = getattr(orig, "shallow_since")
     return result
 
 _common_attrs = {
@@ -71,14 +75,8 @@ _common_attrs = {
     "shallow_since": attr.string(
         default = "",
         doc =
-            "an optional date, not after the specified commit; the argument " +
-            "is not allowed if a tag or branch is specified (which can " +
-            "always be cloned with --depth=1). Setting such a date close to " +
-            "the specified commit may allow for a shallow clone of the " +
-            "repository even if the server does not support shallow fetches " +
-            "of arbitary commits. Due to bugs in git's --shallow-since " +
-            "implementation, using this attribute is not recommended as it " +
-            "may result in fetch failures.",
+            "ignored, kept for backward compatability." +
+            "always clones with --depth=1.",
     ),
     "tag": attr.string(
         default = "",
