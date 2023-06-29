@@ -16,7 +16,9 @@
 package com.google.devtools.build.lib.bazel.bzlmod;
 
 import static com.google.common.collect.ImmutableBiMap.toImmutableBiMap;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.bazel.repository.downloader.DownloadManager;
 import com.google.devtools.build.lib.cmdline.BazelModuleContext;
@@ -51,6 +53,7 @@ import net.starlark.java.eval.Starlark;
 import net.starlark.java.eval.StarlarkList;
 import net.starlark.java.eval.StarlarkSemantics;
 import net.starlark.java.eval.StarlarkThread;
+import net.starlark.java.spelling.SpellChecker;
 import net.starlark.java.syntax.Location;
 
 /**
@@ -139,26 +142,32 @@ public class SingleExtensionEvalFunction implements SkyFunction {
     if (bzlLoadValue == null) {
       return null;
     }
-    // TODO(wyv): Consider whether there's a need to check bzl-visibility
+    // TODO(wyv): Consider whether there's a need to check .bzl load visibility
     // (BzlLoadFunction#checkLoadVisibilities).
     // TODO(wyv): Consider refactoring to use PackageFunction#loadBzlModules, or the simpler API
     // that may be created by b/237658764.
 
     // Check that the .bzl file actually exports a module extension by our name.
     Object exported = bzlLoadValue.getModule().getGlobal(extensionId.getExtensionName());
-    if (!(exported instanceof ModuleExtension.InStarlark)) {
+    if (!(exported instanceof ModuleExtension)) {
+      ImmutableSet<String> exportedExtensions =
+          bzlLoadValue.getModule().getGlobals().entrySet().stream()
+              .filter(e -> e.getValue() instanceof ModuleExtension)
+              .map(Entry::getKey)
+              .collect(toImmutableSet());
       throw new SingleExtensionEvalFunctionException(
           ExternalDepsException.withMessage(
               Code.BAD_MODULE,
-              "%s does not export a module extension called %s, yet its use is requested at %s",
+              "%s does not export a module extension called %s, yet its use is requested at %s%s",
               extensionId.getBzlFileLabel(),
               extensionId.getExtensionName(),
-              sampleUsageLocation),
+              sampleUsageLocation,
+              SpellChecker.didYouMean(extensionId.getExtensionName(), exportedExtensions)),
           Transience.PERSISTENT);
     }
 
     // Run that extension!
-    ModuleExtension extension = ((ModuleExtension.InStarlark) exported).get();
+    ModuleExtension extension = (ModuleExtension) exported;
     ModuleExtensionEvalStarlarkThreadContext threadContext =
         new ModuleExtensionEvalStarlarkThreadContext(
             usagesValue.getExtensionUniqueName() + "~",
@@ -174,8 +183,26 @@ public class SingleExtensionEvalFunction implements SkyFunction {
           createContext(env, usagesValue, starlarkSemantics, extensionId, extension);
       threadContext.storeInThread(thread);
       try {
-        Starlark.fastcall(
-            thread, extension.getImplementation(), new Object[] {moduleContext}, new Object[0]);
+        Object returnValue =
+            Starlark.fastcall(
+                thread, extension.getImplementation(), new Object[] {moduleContext}, new Object[0]);
+        if (returnValue != Starlark.NONE && !(returnValue instanceof ModuleExtensionMetadata)) {
+          throw new SingleExtensionEvalFunctionException(
+              ExternalDepsException.withMessage(
+                  Code.BAD_MODULE,
+                  "expected module extension %s in %s to return None or extension_metadata, got %s",
+                  extensionId.getExtensionName(),
+                  extensionId.getBzlFileLabel(),
+                  Starlark.type(returnValue)),
+              Transience.PERSISTENT);
+        }
+        if (returnValue instanceof ModuleExtensionMetadata) {
+          ModuleExtensionMetadata metadata = (ModuleExtensionMetadata) returnValue;
+          metadata.evaluate(
+              usagesValue.getExtensionUsages().values(),
+              threadContext.getGeneratedRepos().keySet(),
+              env.getListener());
+        }
       } catch (NeedsSkyframeRestartException e) {
         // Clean up and restart by returning null.
         try {
@@ -206,12 +233,14 @@ public class SingleExtensionEvalFunction implements SkyFunction {
               ExternalDepsException.withMessage(
                   Code.BAD_MODULE,
                   "module extension \"%s\" from \"%s\" does not generate repository \"%s\", yet it"
-                      + " is imported as \"%s\" in the usage at %s",
+                      + " is imported as \"%s\" in the usage at %s%s",
                   extensionId.getExtensionName(),
                   extensionId.getBzlFileLabel(),
                   repoImport.getValue(),
                   repoImport.getKey(),
-                  usage.getLocation()),
+                  usage.getLocation(),
+                  SpellChecker.didYouMean(
+                      repoImport.getValue(), threadContext.getGeneratedRepos().keySet())),
               Transience.PERSISTENT);
         }
       }

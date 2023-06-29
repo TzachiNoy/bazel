@@ -14,6 +14,7 @@ package com.google.devtools.build.lib.remote;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.extensions.proto.ProtoTruth.assertThat;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static com.google.devtools.build.lib.actions.ExecutionRequirements.REMOTE_EXECUTION_INLINE_OUTPUTS;
 import static com.google.devtools.build.lib.remote.util.DigestUtil.toBinaryDigest;
@@ -22,7 +23,7 @@ import static com.google.devtools.build.lib.vfs.FileSystemUtils.readContent;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
@@ -39,6 +40,8 @@ import build.bazel.remote.execution.v2.Digest;
 import build.bazel.remote.execution.v2.Directory;
 import build.bazel.remote.execution.v2.DirectoryNode;
 import build.bazel.remote.execution.v2.FileNode;
+import build.bazel.remote.execution.v2.NodeProperties;
+import build.bazel.remote.execution.v2.NodeProperty;
 import build.bazel.remote.execution.v2.OutputDirectory;
 import build.bazel.remote.execution.v2.OutputFile;
 import build.bazel.remote.execution.v2.OutputSymlink;
@@ -60,12 +63,10 @@ import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ActionUploadFinishedEvent;
 import com.google.devtools.build.lib.actions.ActionUploadStartedEvent;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
-import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.ArtifactRoot.RootType;
+import com.google.devtools.build.lib.actions.EmptyRunfilesSupplier;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
-import com.google.devtools.build.lib.actions.FileArtifactValue.RemoteFileArtifactValue;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
@@ -80,6 +81,7 @@ import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.events.StoredEventHandler;
+import com.google.devtools.build.lib.exec.Protos.CacheSalt;
 import com.google.devtools.build.lib.exec.util.FakeOwner;
 import com.google.devtools.build.lib.exec.util.SpawnBuilder;
 import com.google.devtools.build.lib.remote.RemoteExecutionService.RemoteActionResult;
@@ -99,7 +101,6 @@ import com.google.devtools.build.lib.remote.util.RxNoGlobalErrorsRule;
 import com.google.devtools.build.lib.remote.util.TempPathGenerator;
 import com.google.devtools.build.lib.remote.util.TracingMetadataUtils;
 import com.google.devtools.build.lib.remote.util.Utils.InMemoryOutput;
-import com.google.devtools.build.lib.skyframe.TreeArtifactValue;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileSystem;
@@ -112,8 +113,6 @@ import com.google.devtools.common.options.Options;
 import com.google.protobuf.ByteString;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.Collection;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -182,7 +181,87 @@ public class RemoteExecutionServiceTest {
   }
 
   @Test
-  public void buildRemoteAction_differentiateWorkspace_generateActionSalt() throws Exception {
+  public void buildRemoteAction_withRegularFileAsOutput() throws Exception {
+    PathFragment execPath = execRoot.getRelative("path/to/tree").asFragment();
+    Spawn spawn =
+        new SpawnBuilder("dummy")
+            .withOutput(ActionsTestUtil.createArtifactWithExecPath(artifactRoot, execPath))
+            .build();
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    RemoteExecutionService service = newRemoteExecutionService();
+
+    RemoteAction remoteAction = service.buildRemoteAction(spawn, context);
+
+    assertThat(remoteAction.getCommand().getOutputFilesList()).containsExactly(execPath.toString());
+    assertThat(remoteAction.getCommand().getOutputDirectoriesList()).isEmpty();
+  }
+
+  @Test
+  public void buildRemoteAction_withTreeArtifactAsOutput() throws Exception {
+    Spawn spawn =
+        new SpawnBuilder("dummy")
+            .withOutput(
+                ActionsTestUtil.createTreeArtifactWithGeneratingAction(
+                    artifactRoot, PathFragment.create("path/to/dir")))
+            .build();
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    RemoteExecutionService service = newRemoteExecutionService();
+
+    RemoteAction remoteAction = service.buildRemoteAction(spawn, context);
+
+    assertThat(remoteAction.getCommand().getOutputFilesList()).isEmpty();
+    assertThat(remoteAction.getCommand().getOutputDirectoriesList()).containsExactly("path/to/dir");
+  }
+
+  @Test
+  public void buildRemoteAction_withUnresolvedSymlinkAsOutput() throws Exception {
+    Spawn spawn =
+        new SpawnBuilder("dummy")
+            .withOutput(
+                ActionsTestUtil.createUnresolvedSymlinkArtifactWithExecPath(
+                    artifactRoot, PathFragment.create("path/to/link")))
+            .build();
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    RemoteExecutionService service = newRemoteExecutionService();
+
+    RemoteAction remoteAction = service.buildRemoteAction(spawn, context);
+
+    assertThat(remoteAction.getCommand().getOutputFilesList()).containsExactly("path/to/link");
+    assertThat(remoteAction.getCommand().getOutputDirectoriesList()).isEmpty();
+  }
+
+  @Test
+  public void buildRemoteAction_withActionInputFileAsOutput() throws Exception {
+    Spawn spawn =
+        new SpawnBuilder("dummy")
+            .withOutput(ActionInputHelper.fromPath(PathFragment.create("path/to/file")))
+            .build();
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    RemoteExecutionService service = newRemoteExecutionService();
+
+    RemoteAction remoteAction = service.buildRemoteAction(spawn, context);
+
+    assertThat(remoteAction.getCommand().getOutputFilesList()).containsExactly("path/to/file");
+    assertThat(remoteAction.getCommand().getOutputDirectoriesList()).isEmpty();
+  }
+
+  @Test
+  public void buildRemoteAction_withActionInputDirectoryAsOutput() throws Exception {
+    Spawn spawn =
+        new SpawnBuilder("dummy")
+            .withOutput(ActionInputHelper.fromPathToDirectory(PathFragment.create("path/to/dir")))
+            .build();
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    RemoteExecutionService service = newRemoteExecutionService();
+
+    RemoteAction remoteAction = service.buildRemoteAction(spawn, context);
+
+    assertThat(remoteAction.getCommand().getOutputFilesList()).isEmpty();
+    assertThat(remoteAction.getCommand().getOutputDirectoriesList()).containsExactly("path/to/dir");
+  }
+
+  @Test
+  public void buildRemoteAction_generateActionSalt_differentiateWorkspaceCache() throws Exception {
     Spawn spawn =
         new SpawnBuilder("dummy")
             .withExecutionInfo(ExecutionRequirements.DIFFERENTIATE_WORKSPACE_CACHE, "aa")
@@ -192,10 +271,23 @@ public class RemoteExecutionServiceTest {
 
     RemoteAction remoteAction = service.buildRemoteAction(spawn, context);
 
-    Platform expected =
-        Platform.newBuilder()
-            .addProperties(Platform.Property.newBuilder().setName("workspace").setValue("aa"))
+    CacheSalt expected =
+        CacheSalt.newBuilder().setMayBeExecutedRemotely(true).setWorkspace("aa").build();
+    assertThat(remoteAction.getAction().getSalt()).isEqualTo(expected.toByteString());
+  }
+
+  @Test
+  public void buildRemoteAction_generateActionSalt_noRemoteExec() throws Exception {
+    Spawn spawn =
+        new SpawnBuilder("dummy")
+            .withExecutionInfo(ExecutionRequirements.NO_REMOTE_EXEC, "")
             .build();
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    RemoteExecutionService service = newRemoteExecutionService();
+
+    RemoteAction remoteAction = service.buildRemoteAction(spawn, context);
+
+    CacheSalt expected = CacheSalt.newBuilder().setMayBeExecutedRemotely(false).build();
     assertThat(remoteAction.getAction().getSalt()).isEqualTo(expected.toByteString());
   }
 
@@ -847,35 +939,6 @@ public class RemoteExecutionServiceTest {
   }
 
   @Test
-  public void downloadOutputs_outputFilesWithTopLevel_download() throws Exception {
-    // arrange
-    Digest d1 = cache.addContents(remoteActionExecutionContext, "content1");
-    ActionResult r =
-        ActionResult.newBuilder()
-            .setExitCode(0)
-            .addOutputFiles(OutputFile.newBuilder().setPath("outputs/file1").setDigest(d1))
-            .build();
-
-    RemoteActionResult result = RemoteActionResult.createFromCache(CachedActionResult.remote(r));
-    Spawn spawn = newSpawnFromResult(result);
-    RemoteActionFileSystem actionFileSystem = mock(RemoteActionFileSystem.class);
-    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn, actionFileSystem);
-    RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
-    remoteOptions.remoteOutputsMode = RemoteOutputsMode.TOPLEVEL;
-    RemoteExecutionService service =
-        newRemoteExecutionService(remoteOptions, spawn.getOutputFiles());
-    RemoteAction action = service.buildRemoteAction(spawn, context);
-
-    // act
-    service.downloadOutputs(action, result);
-
-    // assert
-    verify(actionFileSystem, never()).injectFile(any(), any());
-    assertThat(digestUtil.compute(execRoot.getRelative("outputs/file1"))).isEqualTo(d1);
-    assertThat(context.isLockOutputFilesCalled()).isTrue();
-  }
-
-  @Test
   public void downloadOutputs_outputFilesWithoutTopLevel_inject() throws Exception {
     // arrange
     Digest d1 = cache.addContents(remoteActionExecutionContext, "content1");
@@ -900,7 +963,12 @@ public class RemoteExecutionServiceTest {
     // assert
     assertThat(inMemoryOutput).isNull();
     Artifact a1 = ActionsTestUtil.createArtifact(artifactRoot, "file1");
-    verify(actionFileSystem).injectFile(eq(a1), remoteFileMatchingDigest(d1));
+    verify(actionFileSystem)
+        .injectRemoteFile(
+            eq(execRoot.asFragment().getRelative(a1.getExecPath())),
+            eq(toBinaryDigest(d1)),
+            eq(d1.getSizeBytes()),
+            anyLong());
     Path outputBase = checkNotNull(artifactRoot.getRoot().asPath());
     assertThat(outputBase.readdir(Symlinks.NOFOLLOW)).isEmpty();
     assertThat(context.isLockOutputFilesCalled()).isTrue();
@@ -936,8 +1004,18 @@ public class RemoteExecutionServiceTest {
     assertThat(inMemoryOutput).isNull();
     Artifact a1 = ActionsTestUtil.createArtifact(artifactRoot, "file1");
     Artifact a2 = ActionsTestUtil.createArtifact(artifactRoot, "file2");
-    verify(actionFileSystem).injectFile(eq(a1), remoteFileMatchingDigest(d1));
-    verify(actionFileSystem).injectFile(eq(a2), remoteFileMatchingDigest(d2));
+    verify(actionFileSystem)
+        .injectRemoteFile(
+            eq(execRoot.asFragment().getRelative(a1.getExecPath())),
+            eq(toBinaryDigest(d1)),
+            eq(d1.getSizeBytes()),
+            anyLong());
+    verify(actionFileSystem)
+        .injectRemoteFile(
+            eq(execRoot.asFragment().getRelative(a2.getExecPath())),
+            eq(toBinaryDigest(d2)),
+            eq(d2.getSizeBytes()),
+            anyLong());
     Path outputBase = checkNotNull(artifactRoot.getRoot().asPath());
     assertThat(outputBase.readdir(Symlinks.NOFOLLOW)).isEmpty();
     assertThat(context.isLockOutputFilesCalled()).isTrue();
@@ -986,21 +1064,18 @@ public class RemoteExecutionServiceTest {
 
     // assert
     assertThat(inMemoryOutput).isNull();
-    SpecialArtifact dir =
-        ActionsTestUtil.createTreeArtifactWithGeneratingAction(
-            artifactRoot, PathFragment.create("outputs/dir"));
-    TreeArtifactValue tree =
-        TreeArtifactValue.newBuilder(dir)
-            .putChild(
-                TreeFileArtifact.createTreeOutput(dir, "file1"),
-                RemoteFileArtifactValue.create(
-                    toBinaryDigest(d1), d1.getSizeBytes(), 1, action.getActionId()))
-            .putChild(
-                TreeFileArtifact.createTreeOutput(dir, "a/file2"),
-                RemoteFileArtifactValue.create(
-                    toBinaryDigest(d2), d2.getSizeBytes(), 1, action.getActionId()))
-            .build();
-    verify(actionFileSystem).injectTree(dir, tree);
+    verify(actionFileSystem)
+        .injectRemoteFile(
+            eq(execRoot.asFragment().getRelative("outputs/dir/file1")),
+            eq(toBinaryDigest(d1)),
+            eq(d1.getSizeBytes()),
+            anyLong());
+    verify(actionFileSystem)
+        .injectRemoteFile(
+            eq(execRoot.asFragment().getRelative("outputs/dir/a/file2")),
+            eq(toBinaryDigest(d2)),
+            eq(d2.getSizeBytes()),
+            anyLong());
     Path outputBase = checkNotNull(artifactRoot.getRoot().asPath());
     assertThat(outputBase.readdir(Symlinks.NOFOLLOW)).isEmpty();
     assertThat(context.isLockOutputFilesCalled()).isTrue();
@@ -1059,9 +1134,7 @@ public class RemoteExecutionServiceTest {
   }
 
   @Test
-  public void downloadOutputs_stdoutAndStdErrWithMinimal_works() throws Exception {
-    // Test that downloading of non-embedded stdout and stderr works
-
+  public void downloadOutputs_nonInlinedStdoutAndStderrWithMinimal_works() throws Exception {
     // arrange
     Digest dOut = cache.addContents(remoteActionExecutionContext, "stdout");
     Digest dErr = cache.addContents(remoteActionExecutionContext, "stderr");
@@ -1085,6 +1158,51 @@ public class RemoteExecutionServiceTest {
     InMemoryOutput inMemoryOutput = service.downloadOutputs(action, result);
 
     // assert
+    verify(actionFileSystem)
+        .injectRemoteFile(
+            eq(outErr.getOutputPathFragment()), eq(toBinaryDigest(dOut)), eq(6L), anyLong());
+    verify(actionFileSystem)
+        .injectRemoteFile(
+            eq(outErr.getErrorPathFragment()), eq(toBinaryDigest(dErr)), eq(6L), anyLong());
+    assertThat(inMemoryOutput).isNull();
+    assertThat(outErr.outAsLatin1()).isEqualTo("stdout");
+    assertThat(outErr.errAsLatin1()).isEqualTo("stderr");
+    Path outputBase = checkNotNull(artifactRoot.getRoot().asPath());
+    assertThat(outputBase.readdir(Symlinks.NOFOLLOW)).isEmpty();
+    assertThat(context.isLockOutputFilesCalled()).isTrue();
+  }
+
+  @Test
+  public void downloadOutputs_inlinedStdoutAndStderrWithMinimal_works() throws Exception {
+    // arrange
+    Digest dOut = digestUtil.compute("stdout".getBytes(UTF_8));
+    Digest dErr = digestUtil.compute("stderr".getBytes(UTF_8));
+    ActionResult r =
+        ActionResult.newBuilder()
+            .setExitCode(0)
+            .setStdoutRaw(ByteString.copyFromUtf8("stdout"))
+            .setStderrRaw(ByteString.copyFromUtf8("stderr"))
+            .build();
+
+    RemoteActionResult result = RemoteActionResult.createFromCache(CachedActionResult.remote(r));
+    Spawn spawn = newSpawnFromResult(result);
+    RemoteActionFileSystem actionFileSystem = mock(RemoteActionFileSystem.class);
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn, actionFileSystem);
+    RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
+    remoteOptions.remoteOutputsMode = RemoteOutputsMode.MINIMAL;
+    RemoteExecutionService service = newRemoteExecutionService(remoteOptions);
+    RemoteAction action = service.buildRemoteAction(spawn, context);
+
+    // act
+    InMemoryOutput inMemoryOutput = service.downloadOutputs(action, result);
+
+    // assert
+    verify(actionFileSystem)
+        .injectRemoteFile(
+            eq(outErr.getOutputPathFragment()), eq(toBinaryDigest(dOut)), eq(6L), anyLong());
+    verify(actionFileSystem)
+        .injectRemoteFile(
+            eq(outErr.getErrorPathFragment()), eq(toBinaryDigest(dErr)), eq(6L), anyLong());
     assertThat(inMemoryOutput).isNull();
     assertThat(outErr.outAsLatin1()).isEqualTo("stdout");
     assertThat(outErr.errAsLatin1()).isEqualTo("stderr");
@@ -1129,8 +1247,18 @@ public class RemoteExecutionServiceTest {
     Artifact a2 = ActionsTestUtil.createArtifact(artifactRoot, "file2");
     assertThat(inMemoryOutput.getOutput()).isEqualTo(a1);
     // The in memory file also needs to be injected as an output
-    verify(actionFileSystem).injectFile(eq(a1), remoteFileMatchingDigest(d1));
-    verify(actionFileSystem).injectFile(eq(a2), remoteFileMatchingDigest(d2));
+    verify(actionFileSystem)
+        .injectRemoteFile(
+            eq(execRoot.asFragment().getRelative(a1.getExecPath())),
+            eq(toBinaryDigest(d1)),
+            eq(d1.getSizeBytes()),
+            anyLong());
+    verify(actionFileSystem)
+        .injectRemoteFile(
+            eq(execRoot.asFragment().getRelative(a2.getExecPath())),
+            eq(toBinaryDigest(d2)),
+            eq(d2.getSizeBytes()),
+            anyLong());
     Path outputBase = checkNotNull(artifactRoot.getRoot().asPath());
     assertThat(outputBase.readdir(Symlinks.NOFOLLOW)).isEmpty();
     assertThat(context.isLockOutputFilesCalled()).isTrue();
@@ -1150,15 +1278,15 @@ public class RemoteExecutionServiceTest {
     Spawn spawn =
         new SimpleSpawn(
             new FakeOwner("foo", "bar", "//dummy:label"),
-            /*arguments=*/ ImmutableList.of(),
-            /*environment=*/ ImmutableMap.of(),
-            /*executionInfo=*/ ImmutableMap.of(REMOTE_EXECUTION_INLINE_OUTPUTS, "outputs/file1"),
-            /*runfilesSupplier=*/ null,
-            /*filesetMappings=*/ ImmutableMap.of(),
-            /*inputs=*/ NestedSetBuilder.emptySet(Order.STABLE_ORDER),
-            /*tools=*/ NestedSetBuilder.emptySet(Order.STABLE_ORDER),
-            /*outputs=*/ ImmutableSet.of(a1),
-            /*mandatoryOutputs=*/ ImmutableSet.of(),
+            /* arguments= */ ImmutableList.of(),
+            /* environment= */ ImmutableMap.of(),
+            /* executionInfo= */ ImmutableMap.of(REMOTE_EXECUTION_INLINE_OUTPUTS, "outputs/file1"),
+            /* runfilesSupplier= */ null,
+            /* filesetMappings= */ ImmutableMap.of(),
+            /* inputs= */ NestedSetBuilder.emptySet(Order.STABLE_ORDER),
+            /* tools= */ NestedSetBuilder.emptySet(Order.STABLE_ORDER),
+            /* outputs= */ ImmutableSet.of(a1),
+            /* mandatoryOutputs= */ ImmutableSet.of(),
             ResourceSet.ZERO);
 
     RemoteActionFileSystem actionFileSystem = mock(RemoteActionFileSystem.class);
@@ -1174,7 +1302,12 @@ public class RemoteExecutionServiceTest {
     // assert
     assertThat(inMemoryOutput).isNull();
     // The in memory file metadata also should not have been injected.
-    verify(actionFileSystem, never()).injectFile(eq(a1), remoteFileMatchingDigest(d1));
+    verify(actionFileSystem, never())
+        .injectRemoteFile(
+            eq(execRoot.asFragment().getRelative(a1.getExecPath())),
+            eq(toBinaryDigest(d1)),
+            eq(d1.getSizeBytes()),
+            anyLong());
   }
 
   @Test
@@ -1256,7 +1389,11 @@ public class RemoteExecutionServiceTest {
         .setPath("outputs/a/foo")
         .setDigest(fooDigest)
         .setIsExecutable(true);
-    expectedResult.addOutputDirectoriesBuilder().setPath("outputs/bar").setTreeDigest(barDigest);
+    expectedResult
+        .addOutputDirectoriesBuilder()
+        .setPath("outputs/bar")
+        .setTreeDigest(barDigest)
+        .setIsTopologicallySorted(true);
     assertThat(manifest.getActionResult()).isEqualTo(expectedResult.build());
 
     ImmutableList<Digest> toQuery = ImmutableList.of(fooDigest, quxDigest, barDigest);
@@ -1294,7 +1431,11 @@ public class RemoteExecutionServiceTest {
 
     // assert
     ActionResult.Builder expectedResult = ActionResult.newBuilder();
-    expectedResult.addOutputDirectoriesBuilder().setPath("outputs/bar").setTreeDigest(barDigest);
+    expectedResult
+        .addOutputDirectoriesBuilder()
+        .setPath("outputs/bar")
+        .setTreeDigest(barDigest)
+        .setIsTopologicallySorted(true);
     assertThat(manifest.getActionResult()).isEqualTo(expectedResult.build());
     assertThat(
             getFromFuture(
@@ -1359,7 +1500,11 @@ public class RemoteExecutionServiceTest {
 
     // assert
     ActionResult.Builder expectedResult = ActionResult.newBuilder();
-    expectedResult.addOutputDirectoriesBuilder().setPath("outputs/bar").setTreeDigest(barDigest);
+    expectedResult
+        .addOutputDirectoriesBuilder()
+        .setPath("outputs/bar")
+        .setTreeDigest(barDigest)
+        .setIsTopologicallySorted(true);
     assertThat(manifest.getActionResult()).isEqualTo(expectedResult.build());
 
     ImmutableList<Digest> toQuery = ImmutableList.of(wobbleDigest, quxDigest, barDigest);
@@ -1539,7 +1684,7 @@ public class RemoteExecutionServiceTest {
       executorService.execute(
           () -> {
             try {
-              service.uploadInputsIfNotPresent(action, /*force=*/ false);
+              service.uploadInputsIfNotPresent(action, /* force= */ false);
             } catch (Throwable e) {
               if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
@@ -1585,7 +1730,7 @@ public class RemoteExecutionServiceTest {
               if (shouldInterrupt) {
                 Thread.currentThread().interrupt();
               }
-              service.uploadInputsIfNotPresent(action, /*force=*/ false);
+              service.uploadInputsIfNotPresent(action, /* force= */ false);
             } catch (Throwable e) {
               if (!(shouldInterrupt && e instanceof InterruptedException)) {
                 error.set(e);
@@ -1628,10 +1773,10 @@ public class RemoteExecutionServiceTest {
         new Thread(
             () -> {
               try {
-                service.uploadInputsIfNotPresent(action, /*force=*/ false);
+                service.uploadInputsIfNotPresent(action, /* force= */ false);
               } catch (InterruptedException ignored) {
                 interrupted.countDown();
-              } catch (IOException ignored) {
+              } catch (Exception ignored) {
                 // intentionally ignored
               }
             });
@@ -1664,8 +1809,10 @@ public class RemoteExecutionServiceTest {
 
     // arrange
     // Single node NestedSets are folded, so always add a dummy file everywhere.
-    ActionInput dummyFile = ActionInputHelper.fromPath("dummy");
-    fakeFileCache.createScratchInput(dummyFile, "dummy");
+    ActionInput dummyFile = ActionInputHelper.fromPath("file");
+    fakeFileCache.createScratchInput(dummyFile, "file");
+
+    ActionInput tree = ActionsTestUtil.createTreeArtifactWithGeneratingAction(artifactRoot, "tree");
 
     ActionInput barFile = ActionInputHelper.fromPath("bar/file");
     NestedSet<ActionInput> nodeBar =
@@ -1685,12 +1832,14 @@ public class RemoteExecutionServiceTest {
     NestedSet<ActionInput> nodeRoot1 =
         new NestedSetBuilder<ActionInput>(Order.STABLE_ORDER)
             .add(dummyFile)
+            .add(tree)
             .addTransitive(nodeBar)
             .addTransitive(nodeFoo1)
             .build();
     NestedSet<ActionInput> nodeRoot2 =
         new NestedSetBuilder<ActionInput>(Order.STABLE_ORDER)
             .add(dummyFile)
+            .add(tree)
             .addTransitive(nodeBar)
             .addTransitive(nodeFoo2)
             .build();
@@ -1698,20 +1847,20 @@ public class RemoteExecutionServiceTest {
     Spawn spawn1 =
         new SimpleSpawn(
             new FakeOwner("foo", "bar", "//dummy:label"),
-            /*arguments=*/ ImmutableList.of(),
-            /*environment=*/ ImmutableMap.of(),
-            /*executionInfo=*/ ImmutableMap.of(),
-            /*inputs=*/ nodeRoot1,
-            /*outputs=*/ ImmutableSet.of(),
+            /* arguments= */ ImmutableList.of(),
+            /* environment= */ ImmutableMap.of(),
+            /* executionInfo= */ ImmutableMap.of(),
+            /* inputs= */ nodeRoot1,
+            /* outputs= */ ImmutableSet.of(),
             ResourceSet.ZERO);
     Spawn spawn2 =
         new SimpleSpawn(
             new FakeOwner("foo", "bar", "//dummy:label"),
-            /*arguments=*/ ImmutableList.of(),
-            /*environment=*/ ImmutableMap.of(),
-            /*executionInfo=*/ ImmutableMap.of(),
-            /*inputs=*/ nodeRoot2,
-            /*outputs=*/ ImmutableSet.of(),
+            /* arguments= */ ImmutableList.of(),
+            /* environment= */ ImmutableMap.of(),
+            /* executionInfo= */ ImmutableMap.of(),
+            /* inputs= */ nodeRoot2,
+            /* outputs= */ ImmutableSet.of(),
             ResourceSet.ZERO);
 
     FakeSpawnExecutionContext context1 = newSpawnExecutionContext(spawn1);
@@ -1725,15 +1874,109 @@ public class RemoteExecutionServiceTest {
     service.buildRemoteAction(spawn1, context1);
 
     // assert first time
-    // Called for: manifests, runfiles, nodeRoot1, nodeFoo1 and nodeBar.
-    verify(service, times(5)).uncachedBuildMerkleTreeVisitor(any(), any());
+    verify(service, times(6)).uncachedBuildMerkleTreeVisitor(any(), any(), any());
+    assertThat(service.getMerkleTreeCache().asMap().keySet())
+        .containsExactly(
+            ImmutableList.of(ImmutableMap.of(), PathFragment.EMPTY_FRAGMENT), // fileset mapping
+            ImmutableList.of(EmptyRunfilesSupplier.INSTANCE, PathFragment.EMPTY_FRAGMENT),
+            ImmutableList.of(tree, PathFragment.EMPTY_FRAGMENT),
+            ImmutableList.of(nodeRoot1.toNode(), PathFragment.EMPTY_FRAGMENT),
+            ImmutableList.of(nodeFoo1.toNode(), PathFragment.EMPTY_FRAGMENT),
+            ImmutableList.of(nodeBar.toNode(), PathFragment.EMPTY_FRAGMENT));
 
     // act second time
     service.buildRemoteAction(spawn2, context2);
 
     // assert second time
-    // Called again for: manifests, runfiles, nodeRoot2 and nodeFoo2 but not nodeBar (cached).
-    verify(service, times(5 + 4)).uncachedBuildMerkleTreeVisitor(any(), any());
+    verify(service, times(6 + 2)).uncachedBuildMerkleTreeVisitor(any(), any(), any());
+    assertThat(service.getMerkleTreeCache().asMap().keySet())
+        .containsExactly(
+            ImmutableList.of(ImmutableMap.of(), PathFragment.EMPTY_FRAGMENT), // fileset mapping
+            ImmutableList.of(EmptyRunfilesSupplier.INSTANCE, PathFragment.EMPTY_FRAGMENT),
+            ImmutableList.of(tree, PathFragment.EMPTY_FRAGMENT),
+            ImmutableList.of(nodeRoot1.toNode(), PathFragment.EMPTY_FRAGMENT),
+            ImmutableList.of(nodeRoot2.toNode(), PathFragment.EMPTY_FRAGMENT),
+            ImmutableList.of(nodeFoo1.toNode(), PathFragment.EMPTY_FRAGMENT),
+            ImmutableList.of(nodeFoo2.toNode(), PathFragment.EMPTY_FRAGMENT),
+            ImmutableList.of(nodeBar.toNode(), PathFragment.EMPTY_FRAGMENT));
+  }
+
+  @Test
+  public void buildRemoteActionForRemotePersistentWorkers() throws Exception {
+    var input = ActionsTestUtil.createArtifact(artifactRoot, "input");
+    fakeFileCache.createScratchInput(input, "value");
+    var toolInput = ActionsTestUtil.createArtifact(artifactRoot, "worker_input");
+    fakeFileCache.createScratchInput(toolInput, "worker value");
+    Spawn spawn =
+        new SpawnBuilder("@flagfile")
+            .withExecutionInfo(ExecutionRequirements.SUPPORTS_WORKERS, "1")
+            .withInputs(input, toolInput)
+            .withTool(toolInput)
+            .build();
+    FakeSpawnExecutionContext context = newSpawnExecutionContext(spawn);
+    RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
+    remoteOptions.markToolInputs = true;
+    RemoteExecutionService service = newRemoteExecutionService(remoteOptions);
+
+    // Check that worker files are properly marked in the merkle tree.
+    var remoteAction = service.buildRemoteAction(spawn, context);
+    assertThat(remoteAction.getAction().getPlatform())
+        .isEqualTo(
+            Platform.newBuilder()
+                .addProperties(
+                    Platform.Property.newBuilder()
+                        .setName("persistentWorkerKey")
+                        .setValue(
+                            "b22d48cd55755474eae27e63a79306a64146bd5947d5bd3423d78f001cf7b3de"))
+                .build());
+    var merkleTree = remoteAction.getMerkleTree();
+    var outputDirectory =
+        merkleTree.getDirectoryByDigest(merkleTree.getRootProto().getDirectories(0).getDigest());
+    var inputFile =
+        FileNode.newBuilder()
+            .setName("input")
+            .setDigest(
+                Digest.newBuilder()
+                    .setHash("cd42404d52ad55ccfa9aca4adc828aa5800ad9d385a0671fbcbf724118320619")
+                    .setSizeBytes(5))
+            .setIsExecutable(true);
+    var toolFile =
+        FileNode.newBuilder()
+            .setName("worker_input")
+            .setDigest(
+                Digest.newBuilder()
+                    .setHash("bbd21d9e9b2bbadb2bb67202833df0edc8d14baf38be49388ffc71831eb88ac4")
+                    .setSizeBytes(12))
+            .setIsExecutable(true)
+            .setNodeProperties(
+                NodeProperties.newBuilder()
+                    .addProperties(NodeProperty.newBuilder().setName("bazel_tool_input")));
+    assertThat(outputDirectory)
+        .isEqualTo(Directory.newBuilder().addFiles(inputFile).addFiles(toolFile).build());
+
+    // Check that if an non-tool input changes, the persistent worker key does not change.
+    fakeFileCache.createScratchInput(input, "value2");
+    assertThat(service.buildRemoteAction(spawn, context).getAction().getPlatform())
+        .isEqualTo(
+            Platform.newBuilder()
+                .addProperties(
+                    Platform.Property.newBuilder()
+                        .setName("persistentWorkerKey")
+                        .setValue(
+                            "b22d48cd55755474eae27e63a79306a64146bd5947d5bd3423d78f001cf7b3de"))
+                .build());
+
+    // Check that if a tool input changes, the persistent worker key changes.
+    fakeFileCache.createScratchInput(toolInput, "worker value2");
+    assertThat(service.buildRemoteAction(spawn, context).getAction().getPlatform())
+        .isEqualTo(
+            Platform.newBuilder()
+                .addProperties(
+                    Platform.Property.newBuilder()
+                        .setName("persistentWorkerKey")
+                        .setValue(
+                            "997337de8dc20123cd7c8fcaed2c9c79cd8138831f9fbbf119f37d0859c9e83a"))
+                .build());
   }
 
   private Spawn newSpawnFromResult(RemoteActionResult result) {
@@ -1791,11 +2034,11 @@ public class RemoteExecutionServiceTest {
       NestedSet<? extends ActionInput> inputs) {
     return new SimpleSpawn(
         new FakeOwner("foo", "bar", "//dummy:label"),
-        /*arguments=*/ ImmutableList.of(),
-        /*environment=*/ ImmutableMap.of(),
-        /*executionInfo=*/ executionInfo,
-        /*inputs=*/ inputs,
-        /*outputs=*/ outputs,
+        /* arguments= */ ImmutableList.of(),
+        /* environment= */ ImmutableMap.of(),
+        /* executionInfo= */ executionInfo,
+        /* inputs= */ inputs,
+        /* outputs= */ outputs,
         ResourceSet.ZERO);
   }
 
@@ -1818,15 +2061,10 @@ public class RemoteExecutionServiceTest {
   }
 
   private RemoteExecutionService newRemoteExecutionService(RemoteOptions remoteOptions) {
-    return newRemoteExecutionService(remoteOptions, ImmutableList.of());
-  }
-
-  private RemoteExecutionService newRemoteExecutionService(
-      RemoteOptions remoteOptions, Collection<? extends ActionInput> topLevelOutputs) {
     return new RemoteExecutionService(
         directExecutor(),
         reporter,
-        /*verboseFailures=*/ true,
+        /* verboseFailures= */ true,
         execRoot,
         remotePathResolver,
         "none",
@@ -1835,15 +2073,7 @@ public class RemoteExecutionServiceTest {
         remoteOptions,
         cache,
         executor,
-        ImmutableSet.copyOf(topLevelOutputs),
         tempPathGenerator,
         null);
-  }
-
-  private static RemoteFileArtifactValue remoteFileMatchingDigest(Digest expectedDigest) {
-    return argThat(
-        metadata ->
-            Arrays.equals(metadata.getDigest(), toBinaryDigest(expectedDigest))
-                && metadata.getSize() == expectedDigest.getSizeBytes());
   }
 }

@@ -102,7 +102,8 @@ public class BazelAndroidSemantics implements AndroidSemantics {
       NestedSetBuilder<Artifact> filesBuilder,
       Artifact classesDexZip,
       ProguardOutput proguardOutput,
-      Artifact proguardMapOutput)
+      Artifact proguardMapOutput,
+      Artifact mainDexList)
       throws InterruptedException {
     return AndroidBinary.DexPostprocessingOutput.create(classesDexZip, proguardOutput.getMapping());
   }
@@ -121,10 +122,7 @@ public class BazelAndroidSemantics implements AndroidSemantics {
   /* Bazel does not currently support baseline profiles in the final apk.  */
   @Override
   public Artifact getArtProfileForApk(
-      RuleContext ruleContext,
-      Artifact finalClassesDex,
-      Artifact proguardOutputMap,
-      boolean hasProguardSpecs) {
+      RuleContext ruleContext, Artifact finalClassesDex, Artifact proguardOutputMap) {
     return null;
   }
 }

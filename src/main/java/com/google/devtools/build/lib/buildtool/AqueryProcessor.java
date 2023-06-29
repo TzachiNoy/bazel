@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.buildtool;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionException;
-import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.cmdline.TargetPattern;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.query2.PostAnalysisQueryEnvironment;
@@ -41,6 +40,7 @@ import com.google.devtools.build.lib.server.FailureDetails.ActionQuery.Code;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.skyframe.SequencedSkyframeExecutor;
 import com.google.devtools.build.lib.skyframe.actiongraph.v2.ActionGraphDump;
+import com.google.devtools.build.lib.skyframe.actiongraph.v2.AqueryConsumingOutputHandler;
 import com.google.devtools.build.lib.skyframe.actiongraph.v2.AqueryOutputHandler;
 import com.google.devtools.build.lib.skyframe.actiongraph.v2.AqueryOutputHandler.OutputType;
 import com.google.devtools.build.lib.skyframe.actiongraph.v2.InvalidAqueryOutputFormatException;
@@ -91,7 +91,8 @@ public final class AqueryProcessor extends PostAnalysisQueryProcessor<KeyedConfi
                 aqueryOptions.includeFileWriteContents,
                 aqueryOutputHandler,
                 env.getReporter());
-        ((SequencedSkyframeExecutor) env.getSkyframeExecutor()).dumpSkyframeState(actionGraphDump);
+        dumpActionGraph(env, aqueryOutputHandler, actionGraphDump);
+
       } catch (InvalidAqueryOutputFormatException e) {
         String message =
             "--skyframe_state must be used with --output=proto|textproto|jsonproto. "
@@ -118,11 +119,33 @@ public final class AqueryProcessor extends PostAnalysisQueryProcessor<KeyedConfi
     }
   }
 
+  public static void dumpActionGraph(
+      CommandEnvironment env,
+      AqueryOutputHandler aqueryOutputHandler,
+      ActionGraphDump actionGraphDump)
+      throws CommandLineExpansionException, TemplateExpansionException, IOException {
+    if (aqueryOutputHandler instanceof AqueryConsumingOutputHandler) {
+      AqueryConsumingOutputHandler aqueryConsumingOutputHandler =
+          (AqueryConsumingOutputHandler) aqueryOutputHandler;
+      try {
+        aqueryConsumingOutputHandler.startConsumer();
+        ((SequencedSkyframeExecutor) env.getSkyframeExecutor()).dumpSkyframeState(actionGraphDump);
+      } finally {
+        try {
+          aqueryConsumingOutputHandler.stopConsumer();
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+      }
+    } else {
+      ((SequencedSkyframeExecutor) env.getSkyframeExecutor()).dumpSkyframeState(actionGraphDump);
+    }
+  }
+
   @Override
   protected PostAnalysisQueryEnvironment<KeyedConfiguredTargetValue> getQueryEnvironment(
       BuildRequest request,
       CommandEnvironment env,
-      BuildConfigurationValue hostConfiguration,
       TopLevelConfigurations topLevelConfigurations,
       Collection<SkyKey> transitiveConfigurationKeys,
       WalkableGraph walkableGraph) {
@@ -139,7 +162,6 @@ public final class AqueryProcessor extends PostAnalysisQueryProcessor<KeyedConfi
             env.getReporter(),
             extraFunctions,
             topLevelConfigurations,
-            hostConfiguration,
             mainRepoTargetParser,
             env.getPackageManager().getPackagePath(),
             () -> walkableGraph,

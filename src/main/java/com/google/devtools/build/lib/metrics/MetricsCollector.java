@@ -13,9 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.metrics;
 
-import static com.google.common.collect.ImmutableList.toImmutableList;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.eventbus.AllowConcurrentEvents;
 import com.google.common.eventbus.Subscribe;
@@ -36,10 +34,11 @@ import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.Bui
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildMetrics.CumulativeMetrics;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildMetrics.MemoryMetrics;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildMetrics.MemoryMetrics.GarbageMetrics;
+import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildMetrics.NetworkMetrics;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildMetrics.PackageMetrics;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildMetrics.TargetMetrics;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildMetrics.TimingMetrics;
-import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildMetrics.WorkerMetrics;
+import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildMetrics.WorkerPoolMetrics;
 import com.google.devtools.build.lib.buildtool.BuildPrecompleteEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.ExecutionStartingEvent;
 import com.google.devtools.build.lib.clock.BlazeClock;
@@ -47,18 +46,23 @@ import com.google.devtools.build.lib.clock.BlazeClock.NanosToMillisSinceEpochCon
 import com.google.devtools.build.lib.metrics.MetricsModule.Options;
 import com.google.devtools.build.lib.metrics.PostGCMemoryUseRecorder.PeakHeap;
 import com.google.devtools.build.lib.profiler.MemoryProfiler;
+import com.google.devtools.build.lib.profiler.NetworkMetricsCollector;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.runtime.SpawnStats;
 import com.google.devtools.build.lib.skyframe.ExecutionFinishedEvent;
-import com.google.devtools.build.lib.worker.WorkerMetric;
+import com.google.devtools.build.lib.skyframe.TopLevelStatusEvents.TopLevelTargetPendingExecutionEvent;
+import com.google.devtools.build.lib.worker.WorkerCreatedEvent;
+import com.google.devtools.build.lib.worker.WorkerDestroyedEvent;
 import com.google.devtools.build.lib.worker.WorkerMetricsCollector;
 import com.google.devtools.build.skyframe.SkyframeGraphStatsEvent;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import java.time.Duration;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAccumulator;
@@ -69,6 +73,8 @@ class MetricsCollector {
   private final boolean recordMetricsForAllMnemonics;
   // For ActionSummary.
   private final ConcurrentHashMap<String, ActionStats> actionStatsMap = new ConcurrentHashMap<>();
+  // Mapping from worker pool hash, to statistics which we collect during a build.
+  private final HashMap<Integer, WorkerPoolStats> workerPoolStats = new HashMap<>();
 
   // For CumulativeMetrics.
   private final AtomicInteger numAnalyses;
@@ -81,6 +87,10 @@ class MetricsCollector {
   private final ArtifactMetrics.Builder artifactMetrics = ArtifactMetrics.newBuilder();
   private final BuildGraphMetrics.Builder buildGraphMetrics = BuildGraphMetrics.newBuilder();
   private final SpawnStats spawnStats = new SpawnStats();
+  // Skymeld-specific: we don't have an ExecutionStartingEvent for skymeld, so we have to use
+  // TopLevelTargetExecutionStartedEvent. This AtomicBoolean is so that we only account for the
+  // build once.
+  private final AtomicBoolean buildAccountedFor;
 
   @CanIgnoreReturnValue
   private MetricsCollector(
@@ -92,6 +102,7 @@ class MetricsCollector {
     this.numBuilds = numBuilds;
     env.getEventBus().register(this);
     WorkerMetricsCollector.instance().setClock(env.getClock());
+    this.buildAccountedFor = new AtomicBoolean();
   }
 
   static void installInEnv(
@@ -139,6 +150,42 @@ class MetricsCollector {
   @Subscribe
   public synchronized void logExecutionStartingEvent(ExecutionStartingEvent event) {
     numBuilds.getAndIncrement();
+  }
+
+  @Subscribe
+  public synchronized void accountForBuild(
+      @SuppressWarnings("unused") TopLevelTargetPendingExecutionEvent event) {
+    if (buildAccountedFor.compareAndSet(/*expectedValue=*/ false, /*newValue=*/ true)) {
+      numBuilds.getAndIncrement();
+    }
+  }
+
+  @Subscribe
+  public void onWorkerDestroyedAction(WorkerDestroyedEvent event) {
+    synchronized (this) {
+      WorkerPoolStats stats =
+          getWorkerPoolStatsOrInsert(event.getWorkerPoolHash(), event.getMnemonic());
+
+      stats.incrementDestroyedCount();
+    }
+  }
+
+  @Subscribe
+  public void onWorkerCreatedAction(WorkerCreatedEvent event) {
+    synchronized (this) {
+      WorkerPoolStats stats =
+          getWorkerPoolStatsOrInsert(event.getWorkerPoolHash(), event.getMnemonic());
+
+      stats.incrementCreatedCount();
+    }
+  }
+
+  private WorkerPoolStats getWorkerPoolStatsOrInsert(int workerPoolHash, String mnemonic) {
+    WorkerPoolStats stats =
+        workerPoolStats.computeIfAbsent(
+            workerPoolHash, (Integer k) -> new WorkerPoolStats(mnemonic));
+
+    return stats;
   }
 
   @SuppressWarnings("unused")
@@ -191,24 +238,26 @@ class MetricsCollector {
     env.getEventBus().post(new BuildMetricsEvent(createBuildMetrics()));
   }
 
-  private ImmutableList<WorkerMetrics> createWorkerMetrics() {
-    return WorkerMetricsCollector.instance().collectMetrics().stream()
-        .map(WorkerMetric::toProto)
-        .collect(toImmutableList());
-  }
-
   private BuildMetrics createBuildMetrics() {
-    return BuildMetrics.newBuilder()
-        .setActionSummary(finishActionSummary())
-        .setMemoryMetrics(createMemoryMetrics())
-        .setTargetMetrics(targetMetrics.build())
-        .setPackageMetrics(packageMetrics.build())
-        .setTimingMetrics(finishTimingMetrics())
-        .setCumulativeMetrics(createCumulativeMetrics())
-        .setArtifactMetrics(artifactMetrics.build())
-        .setBuildGraphMetrics(buildGraphMetrics.build())
-        .addAllWorkerMetrics(createWorkerMetrics())
-        .build();
+    BuildMetrics.Builder buildMetrics =
+        BuildMetrics.newBuilder()
+            .setActionSummary(finishActionSummary())
+            .setMemoryMetrics(createMemoryMetrics())
+            .setTargetMetrics(targetMetrics.build())
+            .setPackageMetrics(packageMetrics.build())
+            .setTimingMetrics(finishTimingMetrics())
+            .setCumulativeMetrics(createCumulativeMetrics())
+            .setArtifactMetrics(artifactMetrics.build())
+            .setBuildGraphMetrics(buildGraphMetrics.build())
+            .addAllWorkerMetrics(WorkerMetricsCollector.instance().createWorkerMetricsProto())
+            .setWorkerPoolMetrics(createWorkerPoolMetrics());
+
+    NetworkMetrics networkMetrics = NetworkMetricsCollector.instance().collectMetrics();
+    if (networkMetrics != null) {
+      buildMetrics.setNetworkMetrics(networkMetrics);
+    }
+
+    return buildMetrics.build();
   }
 
   private static final int MAX_ACTION_DATA = 20;
@@ -242,9 +291,15 @@ class MetricsCollector {
     spawnSummary
         .entrySet()
         .forEach(
-            e ->
-                actionSummary.addRunnerCount(
-                    RunnerCount.newBuilder().setName(e.getKey()).setCount(e.getValue()).build()));
+            e -> {
+              RunnerCount.Builder builder = RunnerCount.newBuilder();
+              builder.setName(e.getKey()).setCount(e.getValue());
+              String execKind = spawnStats.getExecKindFor(e.getKey());
+              if (execKind != null) {
+                builder.setExecKind(execKind);
+              }
+              actionSummary.addRunnerCount(builder.build());
+            });
     return actionSummary.build();
   }
 
@@ -296,6 +351,52 @@ class MetricsCollector {
       timingMetrics.setCpuTimeInMs(cpuTime.toMillis());
     }
     return timingMetrics.build();
+  }
+
+  private WorkerPoolMetrics createWorkerPoolMetrics() {
+    WorkerPoolMetrics.Builder metricsBuilder = WorkerPoolMetrics.newBuilder();
+
+    workerPoolStats.forEach(
+        (workerPoolHash, workerStats) ->
+            metricsBuilder.addWorkerPoolStats(
+                WorkerPoolMetrics.WorkerPoolStats.newBuilder()
+                    .setHash(workerPoolHash)
+                    .setMnemonic(workerStats.getMnemonic())
+                    .setCreatedCount(workerStats.getCreatedCount())
+                    .setDestroyedCount(workerStats.getDestroyedCount())
+                    .build()));
+
+    return metricsBuilder.build();
+  }
+
+  private static class WorkerPoolStats {
+    private int createdCount;
+    private int destroyedCount;
+    private final String mnemonic;
+
+    WorkerPoolStats(String mnemonic) {
+      this.mnemonic = mnemonic;
+    }
+
+    void incrementCreatedCount() {
+      createdCount++;
+    }
+
+    void incrementDestroyedCount() {
+      destroyedCount++;
+    }
+
+    public int getCreatedCount() {
+      return createdCount;
+    }
+
+    public int getDestroyedCount() {
+      return destroyedCount;
+    }
+
+    public String getMnemonic() {
+      return mnemonic;
+    }
   }
 
   private static class ActionStats {

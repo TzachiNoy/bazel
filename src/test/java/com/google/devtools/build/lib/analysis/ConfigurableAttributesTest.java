@@ -152,7 +152,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
               (builder, env) ->
                   builder.add(
                       attr("dep", BuildType.LABEL)
-                          .value(Label.parseAbsoluteUnchecked("//foo:default"))
+                          .value(Label.parseCanonicalUnchecked("//foo:default"))
                           .allowedFileTypes(FileTypeSet.ANY_FILE)));
 
   private static final MockRule RULE_WITH_NO_PLATFORM =
@@ -642,7 +642,8 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "Illegal ambiguous match on configurable attribute \"srcs\" in //a:gen:\n"
             + "//conditions:dup1\n"
             + "//conditions:dup2\n"
-            + "Multiple matches are not allowed unless one is unambiguously more specialized.");
+            + "Multiple matches are not allowed unless one is unambiguously more specialized "
+            + "or they resolve to the same value.");
   }
 
   /**
@@ -686,6 +687,37 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         /*expected:*/ ImmutableList.of("bin java/a/libmost_precise.jar"),
         /*not expected:*/ ImmutableList.of(
             "bin java/a/libgeneric.jar", "bin java/a/libprecise.jar"));
+  }
+
+  /** Tests that multiple matches are allowed for conditions where the value is the same. */
+  @Test
+  public void multipleMatchesSameValue() throws Exception {
+    reporter.removeHandler(failFastHandler); // Expect errors.
+    scratch.file(
+        "conditions/BUILD",
+        "config_setting(",
+        "    name = 'dup1',",
+        "    values = {'compilation_mode': 'opt'})",
+        "config_setting(",
+        "    name = 'dup2',",
+        "    values = {'define': 'foo=bar'})");
+    scratch.file(
+        "a/BUILD",
+        "genrule(",
+        "    name = 'gen',",
+        "    cmd = '',",
+        "    outs = ['gen.out'],",
+        "    srcs = select({",
+        "        '//conditions:dup1': ['a.in'],",
+        "        '//conditions:dup2': ['a.in'],",
+        "        '" + BuildType.Selector.DEFAULT_CONDITION_KEY + "': [':default.in'],",
+        "    }))");
+    checkRule(
+        "//a:gen",
+        "srcs",
+        ImmutableList.of("-c", "opt", "--define", "foo=bar"),
+        /*expected:*/ ImmutableList.of("src a/a.in"),
+        /*not expected:*/ ImmutableList.of("src a/default.in"));
   }
 
   /**
@@ -1028,10 +1060,11 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
   @Test
   public void selectConcatenatedWithNonSupportingType() throws Exception {
     writeConfigRules();
-    scratch.file("foo/BUILD",
+    scratch.file(
+        "foo/BUILD",
         "rule_with_boolean_attr(",
         "    name = 'binary',",
-        "    boolean_attr= 0 + select({",
+        "    boolean_attr = 0 + select({",
         "        '//conditions:a': 0,",
         "        '//conditions:b': 1,",
         "    }))");
@@ -1425,7 +1458,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
   public void selectOnlyToolchainResolvingTargetsCanSelectDirectlyOnConstraints() throws Exception {
     // Tests select()ing directly on a constraint_value when the rule uses toolchain resolution
     // *only if it has a select()*. As of this test, alias() is the only rule that supports that
-    // (see Alias#useToolchainResolution(ToolchainResolutionMode.HAS_SELECT).
+    // (see Alias#useToolchainResolution(ToolchainResolutionMode.ENABLED_ONLY_FOR_COMMON_LOGIC).
     scratch.file(
         "conditions/BUILD",
         "constraint_setting(name = 'fruit')",
@@ -1476,7 +1509,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "    actual = ':foo')",
         "rule_with_boolean_attr(",
         "    name = 'binary',",
-        "    boolean_attr= select({",
+        "    boolean_attr = select({",
         "        ':foo': 0,",
         "        'alias_to_foo': 1,",
         "    }))");
@@ -1500,7 +1533,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "a/BUILD",
         "rule_with_boolean_attr(",
         "    name = 'binary',",
-        "    boolean_attr= select({",
+        "    boolean_attr = select({",
         "        '//c:foo': 0,",
         "        '//conditions:default': 1",
         "    }))");
@@ -1525,7 +1558,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "a/BUILD",
         "rule_with_boolean_attr(",
         "    name = 'binary',",
-        "    boolean_attr= select({",
+        "    boolean_attr = select({",
         "        '//c:foo': 0,",
         "        '//conditions:default': 1",
         "    }))");
@@ -1550,7 +1583,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "a/BUILD",
         "rule_with_boolean_attr(",
         "    name = 'binary',",
-        "    boolean_attr= select({",
+        "    boolean_attr = select({",
         "        '//c:foo': 0,",
         "        '//conditions:default': 1",
         "    }))");
@@ -1569,7 +1602,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "a/BUILD",
         "rule_with_boolean_attr(",
         "    name = 'binary',",
-        "    boolean_attr= select({",
+        "    boolean_attr = select({",
         "        '//c:foo': 0,",
         "        '//conditions:default': 1",
         "    }))");
@@ -1595,7 +1628,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "a/BUILD",
         "rule_with_boolean_attr(",
         "    name = 'binary',",
-        "    boolean_attr= select({",
+        "    boolean_attr = select({",
         "        '//c:foo': 0,",
         "        '//conditions:default': 1",
         "    }))");
@@ -1621,7 +1654,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "a/BUILD",
         "rule_with_boolean_attr(",
         "    name = 'binary',",
-        "    boolean_attr= select({",
+        "    boolean_attr = select({",
         "        '//c:foo': 0,",
         "        '//conditions:default': 1",
         "    }))");
@@ -1629,6 +1662,155 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
     assertThat(getConfiguredTarget("//a:binary")).isNotNull();
     assertNoEvents();
   }
+
+  @Test
+  public void defaultPublicVisibility_aliasVisibilityIgnored_aliasVisibilityIsDefault()
+      throws Exception {
+    // Production builds default to private visibility, but BuildViewTestCase defaults to public.
+    setPackageOptions(
+        "--default_visibility=private",
+        "--incompatible_enforce_config_setting_visibility=true",
+        "--incompatible_config_setting_private_default_visibility=false");
+    scratch.file(
+        "c/BUILD",
+        "alias(",
+        "    name = 'foo_alias',",
+        "    actual = ':foo')",
+        "config_setting(",
+        "    name = 'foo',",
+        "    define_values = { 'foo': '1' },",
+        ")");
+    scratch.file(
+        "a/BUILD",
+        "rule_with_boolean_attr(",
+        "    name = 'binary',",
+        "    boolean_attr = select({",
+        "        '//c:foo_alias': 0,",
+        "        '//conditions:default': 1",
+        "    }))");
+    reporter.removeHandler(failFastHandler);
+    assertThat(getConfiguredTarget("//a:binary")).isNotNull();
+    assertNoEvents();
+  }
+
+  @Test
+  public void defaultPublicVisibility_aliasVisibilityIgnored_aliasVisibilityIsExplicit()
+      throws Exception {
+    // Production builds default to private visibility, but BuildViewTestCase defaults to public.
+    setPackageOptions(
+        "--default_visibility=private",
+        "--incompatible_enforce_config_setting_visibility=true",
+        "--incompatible_config_setting_private_default_visibility=false");
+    scratch.file(
+        "c/BUILD",
+        "alias(",
+        "    name = 'foo_alias',",
+        "    actual = ':foo',",
+        // Current flag combo skips this and directly checks the config_setting's visibility.
+        "    visibility = ['//visibility:private']",
+        ")",
+        "config_setting(",
+        "    name = 'foo',",
+        "    define_values = { 'foo': '1' },",
+        ")");
+    scratch.file(
+        "a/BUILD",
+        "rule_with_boolean_attr(",
+        "    name = 'binary',",
+        "    boolean_attr = select({",
+        "        '//c:foo_alias': 0,",
+        "        '//conditions:default': 1",
+        "    }))");
+    reporter.removeHandler(failFastHandler);
+    assertThat(getConfiguredTarget("//a:binary")).isNotNull();
+    assertNoEvents();
+  }
+
+  @Test
+  public void defaultPublicVisibility_aliasVisibilityIgnored_configSettingVisibilityIsExplicit()
+      throws Exception {
+    // Production builds default to private visibility, but BuildViewTestCase defaults to public.
+    setPackageOptions(
+        "--default_visibility=private",
+        "--incompatible_enforce_config_setting_visibility=true",
+        "--incompatible_config_setting_private_default_visibility=false");
+    scratch.file(
+        "c/BUILD",
+        "alias(",
+        "    name = 'foo_alias',",
+        "    actual = ':foo',",
+        // Current flag combo skips this and directly checks the config_setting's visibility.
+        "    visibility = ['//visibility:public']",
+        ")",
+        "config_setting(",
+        "    name = 'foo',",
+        "    define_values = { 'foo': '1' },",
+        "    visibility = ['//visibility:private']",
+        ")");
+    scratch.file(
+        "a/BUILD",
+        "rule_with_boolean_attr(",
+        "    name = 'binary',",
+        "    boolean_attr = select({",
+        "        '//c:foo_alias': 0,",
+        "        '//conditions:default': 1",
+        "    }))");
+    reporter.removeHandler(failFastHandler);
+    assertThat(getConfiguredTarget("//a:binary")).isNull();
+    assertContainsEvent("'//c:foo' is not visible from target '//a:binary'");
+  }
+
+  @Test
+  public void defaultPublicVisibility_trimmedConfigsDontCrash() throws Exception {
+    // When enforcing config_setting visibility with
+    // --incompatible_config_setting_private_default_visibility=false, the alias
+    // ConfiguredTargetAndData clones itself with the ConfiguredTargetAndData of the config_setting
+    // it refers to. ConfiguredTargetAndData.fromConfiguredTarget has a safety check that both
+    // configs are the same. When the target with a select() is a test and --trim_test_configuration
+    // is on, the alias takes the parent's config (with TestOptions) but the config_setting has it
+    // stripped. This is a regression test that Blaze doesn't crash expecting those configs to be
+    // equal.
+    setPackageOptions(
+        "--incompatible_enforce_config_setting_visibility=true",
+        "--incompatible_config_setting_private_default_visibility=false");
+    useConfiguration("--trim_test_configuration=true");
+    scratch.file(
+        "c/defs.bzl",
+        "def _impl(ctx):",
+        "    output = ctx.outputs.out",
+        "    ctx.actions.write(output = output, content = 'hi', is_executable = True)",
+        "    return [DefaultInfo(executable = output)]",
+        "",
+        "fake_test = rule(",
+        "    attrs = {",
+        "        'msg': attr.string(),",
+        "    },",
+        "    test = True,",
+        "    outputs = {'out': 'foo.out'},",
+        "    implementation = _impl,",
+        ")");
+    scratch.file(
+        "c/BUILD",
+        "load(':defs.bzl', 'fake_test')",
+        "alias(",
+        "    name = 'foo_alias',",
+        "    actual = ':foo',",
+        ")",
+        "config_setting(",
+        "    name = 'foo',",
+        "    define_values = { 'foo': '1' },",
+        ")",
+        "fake_test(",
+        "    name = 'foo_test',",
+        "    msg = select({",
+        "        ':foo_alias': 'hi',",
+        "        '//conditions:default': 'there'",
+        "    }))");
+    reporter.removeHandler(failFastHandler);
+    assertThat(getConfiguredTarget("//c:foo_test")).isNotNull();
+    assertNoEvents();
+  }
+
   @Test
   public void defaultVisibilityConfigSetting_defaultIsPrivate() throws Exception {
     // Production builds default to private visibility, but BuildViewTestCase defaults to public.
@@ -1640,7 +1822,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "a/BUILD",
         "rule_with_boolean_attr(",
         "    name = 'binary',",
-        "    boolean_attr= select({",
+        "    boolean_attr = select({",
         "        '//c:foo': 0,",
         "        '//conditions:default': 1",
         "    }))");
@@ -1666,7 +1848,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "a/BUILD",
         "rule_with_boolean_attr(",
         "    name = 'binary',",
-        "    boolean_attr= select({",
+        "    boolean_attr = select({",
         "        '//c:foo': 0,",
         "        '//conditions:default': 1",
         "    }))");
@@ -1692,7 +1874,7 @@ public class ConfigurableAttributesTest extends BuildViewTestCase {
         "a/BUILD",
         "rule_with_boolean_attr(",
         "    name = 'binary',",
-        "    boolean_attr= select({",
+        "    boolean_attr = select({",
         "        '//c:foo': 0,",
         "        '//conditions:default': 1",
         "    }))");

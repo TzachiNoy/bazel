@@ -17,7 +17,8 @@ import static com.google.devtools.build.lib.packages.PackageFactory.getContext;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.docgen.annot.DocCategory;
-import com.google.devtools.build.docgen.annot.DocumentMethods;
+import com.google.devtools.build.docgen.annot.GlobalMethods;
+import com.google.devtools.build.docgen.annot.GlobalMethods.Environment;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
@@ -75,8 +76,8 @@ public final class StarlarkLibrary {
 
   /** Proto defines the "proto" Starlark module of utilities for protocol message processing. */
   @StarlarkBuiltin(
-      name = "ProtoModule", // not "proto", to avoid conflict with ctx.fragments.proto data type
-      category = DocCategory.BUILTIN,
+      name = "proto",
+      category = DocCategory.TOP_LEVEL_MODULE,
       doc = "A module for protocol message processing.")
   static final class Proto implements StarlarkValue {
 
@@ -93,41 +94,44 @@ public final class StarlarkLibrary {
                 + "The data structure must be recursively composed of strings, ints, floats, or"
                 + " bools, or structs, sequences, and dicts of these types.\n"
                 + "<p>A struct is converted to a message. Fields are emitted in name order.\n"
+                + "Each struct field whose value is None is ignored.\n"
                 + "<p>A sequence (such as a list or tuple) is converted to a repeated field.\n"
                 + "Its elements must not be sequences or dicts.\n"
                 + "<p>A dict is converted to a repeated field of messages with fields named 'key'"
                 + " and 'value'.\n"
                 + "Entries are emitted in iteration (insertion) order.\n"
-                + "The dict's keys must be strings, ints, or bools, and its values must not be"
-                + " sequences or dicts.\n"
-                + "Examples:<br><pre class=language-python>struct(field=123).to_proto()\n"
+                + "The dict's keys must be strings or ints, and its values must not be sequences or"
+                + " dicts.\n"
+                + "Examples:<br><pre class=language-python>proto.encode_text(struct(field=123))\n"
                 + "# field: 123\n\n"
-                + "struct(field=True).to_proto()\n"
+                + "proto.encode_text(struct(field=True))\n"
                 + "# field: true\n\n"
-                + "struct(field=[1, 2, 3]).to_proto()\n"
+                + "proto.encode_text(struct(field=[1, 2, 3]))\n"
                 + "# field: 1\n"
                 + "# field: 2\n"
                 + "# field: 3\n\n"
-                + "struct(field='text').to_proto()\n"
+                + "proto.encode_text(struct(field='text', ignored_field=None))\n"
                 + "# field: \"text\"\n\n"
-                + "struct(field=struct(inner_field='text')).to_proto()\n"
+                + "proto.encode_text(struct(field=struct(inner_field='text',"
+                + " ignored_field=None)))\n"
                 + "# field {\n"
                 + "#   inner_field: \"text\"\n"
                 + "# }\n\n"
-                + "struct(field=[struct(inner_field=1), struct(inner_field=2)]).to_proto()\n"
+                + "proto.encode_text(struct(field=[struct(inner_field=1),"
+                + " struct(inner_field=2)]))\n"
                 + "# field {\n"
                 + "#   inner_field: 1\n"
                 + "# }\n"
                 + "# field {\n"
                 + "#   inner_field: 2\n"
                 + "# }\n\n"
-                + "struct(field=struct(inner_field=struct(inner_inner_field='text'))).to_proto()\n"
+                + "proto.encode_text(struct(field=struct(inner_field=struct(inner_inner_field='text'))))\n"
                 + "# field {\n"
                 + "#    inner_field {\n"
                 + "#     inner_inner_field: \"text\"\n"
                 + "#   }\n"
                 + "# }\n\n"
-                + "struct(foo={4: 3, 2: 1}).to_proto()\n"
+                + "proto.encode_text(struct(foo={4: 3, 2: 1}))\n"
                 + "# foo: {\n"
                 + "#   key: 4\n"
                 + "#   value: 3\n"
@@ -205,6 +209,9 @@ public final class StarlarkLibrary {
         }
 
         // non-repeated field
+        if (v == Starlark.NONE) {
+          return;
+        }
         fieldElement(name, v);
       }
 
@@ -226,11 +233,18 @@ public final class StarlarkLibrary {
               s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n"),
               "\"");
 
-        } else if (v instanceof StarlarkInt || v instanceof StarlarkFloat || v instanceof Boolean) {
+        } else if (v instanceof StarlarkInt || v instanceof Boolean) {
           emitLine(name, ": ", v.toString());
-
+        } else if (v instanceof StarlarkFloat) {
+          String s = v.toString();
+          // Encoding to textproto via proto.encode_text requires "inf" for "+inf".
+          if (s.equals("+inf")) {
+            s = "inf";
+          }
+          emitLine(name, ": ", s);
         } else {
-          throw Starlark.errorf("got %s, want string, int, bool, or struct", Starlark.type(v));
+          throw Starlark.errorf(
+              "got %s, want string, int, float, bool, or struct", Starlark.type(v));
         }
       }
 
@@ -247,17 +261,18 @@ public final class StarlarkLibrary {
     }
   }
 
-  @DocumentMethods
+  @GlobalMethods(environment = {Environment.BUILD, Environment.BZL})
   private static final class DepsetLibrary {
     @StarlarkMethod(
         name = "depset",
         doc =
-            "Creates a <a href=\"depset.html\">depset</a>. The <code>direct</code> parameter is a"
-                + " list of direct elements of the depset, and <code>transitive</code> parameter is"
-                + " a list of depsets whose elements become indirect elements of the created"
-                + " depset. The order in which elements are returned when the depset is converted"
-                + " to a list is specified by the <code>order</code> parameter. See the <a"
-                + " href=\"https://bazel.build/rules/depsets\">Depsets overview</a> for more"
+            "Creates a <a href=\"../builtins/depset.html\">depset</a>. The <code>direct</code>"
+                + " parameter is a list of direct elements of the depset, and"
+                + " <code>transitive</code> parameter is a list of depsets whose elements become"
+                + " indirect elements of the created depset. The order in which elements are"
+                + " returned when the depset is converted to a list is specified by the"
+                + " <code>order</code> parameter. See the <a"
+                + " href=\"https://bazel.build/extending/depsets\">Depsets overview</a> for more"
                 + " information.\n" //
                 + "<p>All"
                 + " elements (direct and indirect) of a depset must be of the same type, as"
@@ -298,7 +313,7 @@ public final class StarlarkLibrary {
               defaultValue = "\"default\"",
               doc =
                   "The traversal strategy for the new depset. See "
-                      + "<a href=\"depset.html\">here</a> for the possible values.",
+                      + "<a href=\"../builtins/depset.html\">here</a> for the possible values.",
               named = true),
           @Param(
               name = "transitive",
@@ -320,7 +335,7 @@ public final class StarlarkLibrary {
   }
 
   /** A starlark library supporting Bazel's implementation of the `select()` Starlark function. */
-  @DocumentMethods
+  @GlobalMethods(environment = {Environment.BUILD, Environment.BZL})
   public static final class SelectLibrary {
     @StarlarkMethod(
         name = "select",
@@ -335,7 +350,7 @@ public final class StarlarkLibrary {
               positional = true,
               doc =
                   "A dict that maps configuration conditions to values. Each key is a "
-                      + "<a href=\"Label.html\">Label</a> or a label string"
+                      + "<a href=\"../builtins/Label.html\">Label</a> or a label string"
                       + " that identifies a config_setting or constraint_value instance. See the"
                       + " <a href=\"https://bazel.build/rules/macros#label-resolution\">"
                       + "documentation on macros</a> for when to use a Label instead of a string."),
@@ -365,7 +380,7 @@ public final class StarlarkLibrary {
     return env.buildOrThrow();
   }
 
-  @DocumentMethods
+  @GlobalMethods(environment = Environment.BUILD)
   private static class BuildLibrary {
     @StarlarkMethod(
         name = "environment_group",

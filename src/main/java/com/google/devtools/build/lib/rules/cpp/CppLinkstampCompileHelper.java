@@ -62,7 +62,11 @@ public class CppLinkstampCompileHelper {
       CppSemantics semantics) {
     CppCompileActionBuilder builder =
         new CppCompileActionBuilder(
-                actionConstructionContext, grepIncludes, ccToolchainProvider, configuration)
+                actionConstructionContext,
+                grepIncludes,
+                ccToolchainProvider,
+                configuration,
+                semantics)
             .addMandatoryInputs(compilationInputs)
             .setVariables(
                 getVariables(
@@ -83,14 +87,14 @@ public class CppLinkstampCompileHelper {
                     semantics))
             .setFeatureConfiguration(featureConfiguration)
             .setSourceFile(sourceFile)
-            .setSemantics(semantics)
             .setOutputs(outputFile, /* dotdFile= */ null, /* diagnosticsFile= */ null)
-            .setInputsForInvalidation(inputsForInvalidation)
+            .setCacheKeyInputs(inputsForInvalidation)
             .setBuiltinIncludeFiles(buildInfoHeaderArtifacts)
             .addMandatoryInputs(nonCodeInputs)
             .setShareable(true)
             .setShouldScanIncludes(false)
             .setActionName(CppActionNames.LINKSTAMP_COMPILE);
+
     semantics.finalizeCompileActionBuilder(
         configuration, featureConfiguration, builder, ruleErrorConsumer);
     return builder.buildOrThrowIllegalStateException();

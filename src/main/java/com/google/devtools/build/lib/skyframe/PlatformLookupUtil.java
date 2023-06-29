@@ -34,7 +34,7 @@ import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.server.FailureDetails.Toolchain.Code;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
-import com.google.devtools.build.skyframe.SkyframeIterableResult;
+import com.google.devtools.build.skyframe.SkyframeLookupResult;
 import java.util.HashMap;
 import java.util.Map;
 import javax.annotation.Nullable;
@@ -51,7 +51,7 @@ public class PlatformLookupUtil {
       return null;
     }
 
-    SkyframeIterableResult values = env.getOrderedValuesAndExceptions(platformKeys);
+    SkyframeLookupResult values = env.getValuesAndExceptions(platformKeys);
     boolean valuesMissing = env.valuesMissing();
     Map<ConfiguredTargetKey, PlatformInfo> platforms = valuesMissing ? null : new HashMap<>();
     for (ConfiguredTargetKey key : platformKeys) {
@@ -72,22 +72,21 @@ public class PlatformLookupUtil {
       ImmutableList<ConfiguredTargetKey> platformKeys, Environment env)
       throws InterruptedException, InvalidPlatformException {
     // Load the packages. This should already be in Skyframe and thus not require a restart.
-    ImmutableSet<PackageValue.Key> packageKeys =
+    ImmutableSet<PackageIdentifier> packageKeys =
         platformKeys.stream()
             .map(ConfiguredTargetKey::getLabel)
             .map(Label::getPackageIdentifier)
-            .distinct()
-            .map(PackageValue::key)
             .collect(toImmutableSet());
 
-    SkyframeIterableResult values = env.getOrderedValuesAndExceptions(packageKeys);
+    SkyframeLookupResult values = env.getValuesAndExceptions(packageKeys);
     boolean valuesMissing = env.valuesMissing();
     Map<PackageIdentifier, Package> packages = valuesMissing ? null : new HashMap<>();
-    while (values.hasNext()) {
+    for (PackageIdentifier packageKey : packageKeys) {
       try {
-        PackageValue packageValue = (PackageValue) values.nextOrThrow(NoSuchPackageException.class);
+        PackageValue packageValue =
+            (PackageValue) values.getOrThrow(packageKey, NoSuchPackageException.class);
         if (!valuesMissing && packageValue != null) {
-          packages.put(packageValue.getPackage().getPackageIdentifier(), packageValue.getPackage());
+          packages.put(packageKey, packageValue.getPackage());
         }
       } catch (NoSuchPackageException e) {
         throw new InvalidPlatformException(e);
@@ -120,18 +119,18 @@ public class PlatformLookupUtil {
 
   /**
    * Returns the {@link PlatformInfo} provider from the {@link ConfiguredTarget} in the {@link
-   * SkyframeIterableResult}, or {@code null} if the {@link ConfiguredTarget} is not present. If the
+   * SkyframeLookupResult}, or {@code null} if the {@link ConfiguredTarget} is not present. If the
    * {@link ConfiguredTarget} does not have a {@link PlatformInfo} provider, a {@link
    * InvalidPlatformException} is thrown.
    */
   @Nullable
-  private static PlatformInfo findPlatformInfo(
-      ConfiguredTargetKey key, SkyframeIterableResult values) throws InvalidPlatformException {
-
+  private static PlatformInfo findPlatformInfo(ConfiguredTargetKey key, SkyframeLookupResult values)
+      throws InvalidPlatformException {
     try {
       ConfiguredTargetValue ctv =
           (ConfiguredTargetValue)
-              values.nextOrThrow(
+              values.getOrThrow(
+                  key,
                   ConfiguredValueCreationException.class,
                   NoSuchThingException.class,
                   ActionConflictException.class);
@@ -155,7 +154,7 @@ public class PlatformLookupUtil {
     }
   }
 
-  static boolean hasPlatformInfo(Target target) {
+  public static boolean hasPlatformInfo(Target target) {
     Rule rule = target.getAssociatedRule();
     // If the rule uses toolchain resolution, it can't be used as a target or exec platform.
     if (rule == null) {
@@ -174,11 +173,11 @@ public class PlatformLookupUtil {
   public static final class InvalidPlatformException extends ToolchainException {
     private static final String DEFAULT_ERROR = "does not provide PlatformInfo";
 
-    InvalidPlatformException(Label label) {
+    public InvalidPlatformException(Label label) {
       super(formatError(label, DEFAULT_ERROR));
     }
 
-    InvalidPlatformException(Label label, ConfiguredValueCreationException e) {
+    public InvalidPlatformException(Label label, ConfiguredValueCreationException e) {
       super(formatError(label, DEFAULT_ERROR), e);
     }
 
@@ -189,10 +188,6 @@ public class PlatformLookupUtil {
 
     public InvalidPlatformException(Label label, ActionConflictException e) {
       super(formatError(label, DEFAULT_ERROR), e);
-    }
-
-    InvalidPlatformException(Label label, String error) {
-      super(formatError(label, error));
     }
 
     @Override

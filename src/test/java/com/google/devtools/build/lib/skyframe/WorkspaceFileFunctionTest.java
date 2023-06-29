@@ -156,8 +156,7 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
 
   @Test
   public void testBzlVisibility() throws Exception {
-    setBuildLanguageOptions(
-        "--experimental_bzl_visibility=true", "--experimental_bzl_visibility_allowlist=pkg");
+    setBuildLanguageOptions("--experimental_bzl_visibility=true");
 
     createWorkspaceFile(
         "workspace(name = 'foo')", //
@@ -260,7 +259,7 @@ public class WorkspaceFileFunctionTest extends BuildViewTestCase {
     EvaluationResult<PackageValue> evaluationResult = eval(key);
     Package pkg = evaluationResult.get(key).getPackage();
     assertThat(pkg.containsErrors()).isTrue();
-    assertContainsEvent("not a valid absolute pattern");
+    assertContainsEvent("error parsing target pattern");
   }
 
   @Test

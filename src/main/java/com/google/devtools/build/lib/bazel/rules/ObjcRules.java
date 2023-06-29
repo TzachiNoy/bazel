@@ -37,7 +37,7 @@ import com.google.devtools.build.lib.rules.objc.ObjcConfiguration;
 import com.google.devtools.build.lib.rules.objc.ObjcImportBaseRule;
 import com.google.devtools.build.lib.rules.objc.ObjcLibraryBaseRule;
 import com.google.devtools.build.lib.rules.objc.ObjcRuleClasses;
-import com.google.devtools.build.lib.starlarkbuildapi.apple.AppleBootstrap;
+import com.google.devtools.build.lib.starlarkbuildapi.objc.AppleBootstrap;
 
 /** Rules for Objective-C support in Bazel. */
 public class ObjcRules implements RuleSet {
@@ -68,7 +68,6 @@ public class ObjcRules implements RuleSet {
     builder.addRuleDefinition(new ObjcRuleClasses.AlwaysLinkRule());
     builder.addRuleDefinition(new ObjcRuleClasses.SdkFrameworksDependerRule());
     builder.addRuleDefinition(new ObjcRuleClasses.CompileDependencyRule());
-    builder.addRuleDefinition(new ObjcRuleClasses.XcrunRule());
     builder.addRuleDefinition(new ObjcRuleClasses.CrosstoolRule());
     builder.addRuleDefinition(new XcodeConfigRule());
     builder.addRuleDefinition(new XcodeConfigAliasRule());

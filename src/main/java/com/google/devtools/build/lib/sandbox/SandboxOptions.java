@@ -20,6 +20,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.LocalHostCapacity;
 import com.google.devtools.build.lib.util.OptionsUtils;
+import com.google.devtools.build.lib.util.RamResourceConverter;
 import com.google.devtools.build.lib.util.ResourceConverter;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
@@ -130,6 +131,18 @@ public class SandboxOptions extends OptionsBase {
       effectTags = {OptionEffectTag.EXECUTION},
       help = "Change the current username to 'nobody' for sandboxed actions.")
   public boolean sandboxFakeUsername;
+
+  @Option(
+      name = "sandbox_explicit_pseudoterminal",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help =
+          "Explicitly enable the creation of pseudoterminals for sandboxed actions."
+              + " Some linux distributions require setting the group id of the process to 'tty'"
+              + " inside the sandbox in order for pseudoterminals to function. If this is"
+              + " causing issues, this flag can be disabled to enable other groups to be used.")
+  public boolean sandboxExplicitPseudoterminal;
 
   @Option(
       name = "sandbox_block_path",
@@ -336,7 +349,7 @@ public class SandboxOptions extends OptionsBase {
 
   @Option(
       name = "incompatible_legacy_local_fallback",
-      defaultValue = "true",
+      defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
       effectTags = {OptionEffectTag.EXECUTION},
       metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
@@ -348,7 +361,9 @@ public class SandboxOptions extends OptionsBase {
   public boolean legacyLocalFallback;
 
   @Option(
-      name = "experimental_reuse_sandbox_directories",
+      name = "reuse_sandbox_directories",
+      oldName = "experimental_reuse_sandbox_directories",
+      oldNameWarning = false,
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
       effectTags = {OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS, OptionEffectTag.EXECUTION},
@@ -369,6 +384,28 @@ public class SandboxOptions extends OptionsBase {
               + "If action input files are located on a filesystem different from the sandbox, "
               + "then the input files will be copied instead.")
   public boolean useHermetic;
+
+  @Option(
+      name = "incompatible_sandbox_hermetic_tmp",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.EXECUTION},
+      help =
+          "If set to true, each Linux sandbox will have its own dedicated empty directory mounted"
+              + " as /tmp rather thansharing /tmp with the host filesystem. Use"
+              + " --sandbox_add_mount_pair=/tmp to keep seeing the host's /tmp in all sandboxes.")
+  public boolean sandboxHermeticTmp;
+
+  @Option(
+      name = "experimental_sandbox_memory_limit_mb",
+      defaultValue = "0",
+      documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+      effectTags = {OptionEffectTag.EXECUTION},
+      converter = RamResourceConverter.class,
+      help =
+          "If > 0, each Linux sandbox will be limited to the given amount of memory (in MB)."
+              + " Requires cgroups v1 or v2 and permissions for the users to the cgroups dir.")
+  public int memoryLimitMb;
 
   /** Converter for the number of threads used for asynchronous tree deletion. */
   public static final class AsyncTreeDeletesConverter extends ResourceConverter {

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 load("//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
-load("//tools/python:private/defs.bzl", "py_binary", "py_library", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
 licenses(["notice"])
 
@@ -25,19 +25,21 @@ filegroup(
 py_library(
     name = "archive",
     srcs = ["archive.py"],
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
 )
 
 filegroup(
     name = "archive_testdata",
-    srcs = glob(["testdata/**"]),
+    srcs = glob(
+        ["testdata/**"],
+        allow_empty = True,
+    ),
 )
 
 py_test(
     name = "archive_test",
     srcs = [
         "archive_test.py",
-        "testenv.py",
     ],
     data = [":archive_testdata"],
     python_version = "PY3",
@@ -61,11 +63,10 @@ py_binary(
     name = "build_tar",
     srcs = ["build_tar.py"],
     python_version = "PY3",
-    srcs_version = "PY2AND3",
+    srcs_version = "PY3",
     visibility = ["//visibility:public"],
     deps = [
         ":archive",
-        "//third_party/py/abseil",
     ],
 )
 

@@ -3,6 +3,8 @@ Book: /_book.yaml
 
 # Platforms
 
+{% include "_buttons.html" %}
+
 Bazel can build and test code on a variety of hardware, operating systems, and
 system configurations, using many different versions of build tools such as
 linkers and compilers. To help manage this complexity, Bazel has a concept of
@@ -14,7 +16,7 @@ resources that are available in some environment.
 
 Modeling the environment as a platform helps Bazel to automatically select the
 appropriate
-[toolchains](/docs/toolchains)
+[toolchains](/extending/toolchains)
 for build actions. Platforms can also be used in combination with the
 [config_setting](/reference/be/general#config_setting)
 rule to write [configurable attributes](/docs/configurable-attributes).
@@ -38,6 +40,9 @@ Bazel supports the following build scenarios regarding platforms:
 
 *  **Multi-platform builds** - host, execution, and target platforms are all
    different.
+
+Tip: for detailed instructions on migrating your project to platforms, see
+[Migrating to Platforms](/concepts/platforms).
 
 ## Defining constraints and platforms {:#constraints-platforms}
 
@@ -170,6 +175,9 @@ ERROR: Target //:target_incompatible_with_myplatform is incompatible and cannot 
 FAILED: Build did NOT complete successfully
 ```
 
+Incompatible explicit targets are silently skipped if
+`--skip_incompatible_explicit_targets` is enabled.
+
 ### More expressive constraints {:#expressive-constraints}
 
 For more flexibility in expressing constraints, use the
@@ -225,9 +233,9 @@ cc_library(
 ### Detecting incompatible targets using `bazel cquery` {:#cquery-incompatible-target-detection}
 
 You can use the
-[`IncompatiblePlatformProvider`](/rules/lib/IncompatiblePlatformProvider)
+[`IncompatiblePlatformProvider`](/rules/lib/providers/IncompatiblePlatformProvider)
 in `bazel cquery`'s [Starlark output
-format](/docs/cquery#output-format-definition) to distinguish
+format](/query/cquery#output-format-definition) to distinguish
 incompatible targets from compatible ones.
 
 This can be used to filter out incompatible targets. The example below will

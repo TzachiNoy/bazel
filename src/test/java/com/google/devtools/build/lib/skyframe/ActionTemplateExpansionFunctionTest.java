@@ -373,7 +373,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
     EvaluationContext evaluationContext =
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
-            .setNumThreads(SkyframeExecutor.DEFAULT_THREAD_COUNT)
+            .setParallelism(SkyframeExecutor.DEFAULT_THREAD_COUNT)
             .setEventHandler(NullEventHandler.INSTANCE)
             .build();
     EvaluationResult<ActionTemplateExpansionValue> result =
@@ -503,6 +503,11 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
     }
 
     @Override
+    public NestedSet<Artifact> getSchedulingDependencies() {
+      return NestedSetBuilder.emptySet(Order.STABLE_ORDER);
+    }
+
+    @Override
     public Collection<String> getClientEnvironmentVariables() {
       return ImmutableList.of();
     }
@@ -551,7 +556,7 @@ public final class ActionTemplateExpansionFunctionTest extends FoundationTestCas
     }
 
     @Override
-    public synchronized void sendNonFatalBugReport(Exception exception) {
+    public synchronized void sendNonFatalBugReport(Throwable exception) {
       exceptions.add(exception);
     }
 

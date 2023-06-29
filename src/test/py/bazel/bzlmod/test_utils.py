@@ -63,6 +63,7 @@ class Module:
     self.module_dot_bazel = None
     self.patches = []
     self.patch_strip = 0
+    self.archive_type = None
 
   def set_source(self, archive_url, strip_prefix=None):
     self.archive_url = archive_url
@@ -78,6 +79,10 @@ class Module:
     self.patch_strip = patch_strip
     return self
 
+  def set_archive_type(self, archive_type):
+    self.archive_type = archive_type
+    return self
+
 
 class BazelRegistry:
   """A class to help create a Bazel module project from scatch and add it into the registry."""
@@ -89,6 +94,13 @@ class BazelRegistry:
     self.archives = self.root.joinpath('archives')
     self.archives.mkdir(parents=True, exist_ok=True)
     self.registry_suffix = registry_suffix
+
+  def setModuleBasePath(self, module_base_path):
+    bazel_registry = {
+        'module_base_path': module_base_path,
+    }
+    with self.root.joinpath('bazel_registry.json').open('w') as f:
+      json.dump(bazel_registry, f, indent=4, sort_keys=True)
 
   def getURL(self):
     """Return the URL of this registry."""
@@ -179,9 +191,9 @@ class BazelRegistry:
         ])
     return src_dir
 
-  def createArchive(self, name, version, src_dir):
+  def createArchive(self, name, version, src_dir, filename_pattern='%s.%s.zip'):
     """Create an archive with a given source directory."""
-    zip_path = self.archives.joinpath('%s.%s.zip' % (name, version))
+    zip_path = self.archives.joinpath(filename_pattern % (name, version))
     zip_obj = zipfile.ZipFile(str(zip_path), 'w')
     for foldername, _, filenames in os.walk(str(src_dir)):
       for filename in filenames:
@@ -218,24 +230,39 @@ class BazelRegistry:
         source['patches'][patch.name] = integrity(read(patch))
         shutil.copy(str(patch), str(patch_dir))
 
+    if module.archive_type:
+      source['archive_type'] = module.archive_type
+
     with module_dir.joinpath('source.json').open('w') as f:
       json.dump(source, f, indent=4, sort_keys=True)
 
-  def createCcModule(self,
-                     name,
-                     version,
-                     deps=None,
-                     repo_names=None,
-                     patches=None,
-                     patch_strip=0):
+  def createCcModule(
+      self,
+      name,
+      version,
+      deps=None,
+      repo_names=None,
+      patches=None,
+      patch_strip=0,
+      archive_pattern=None,
+      archive_type=None,
+  ):
     """Generate a cc project and add it as a module into the registry."""
     src_dir = self.generateCcSource(name, version, deps, repo_names)
-    archive = self.createArchive(name, version, src_dir)
+    if archive_pattern:
+      archive = self.createArchive(
+          name, version, src_dir, filename_pattern=archive_pattern
+      )
+    else:
+      archive = self.createArchive(name, version, src_dir)
     module = Module(name, version)
     module.set_source(archive.resolve().as_uri())
     module.set_module_dot_bazel(src_dir.joinpath('MODULE.bazel'))
     if patches:
       module.set_patches(patches, patch_strip)
+    if archive_type:
+      module.set_archive_type(archive_type)
+
     self.addModule(module)
     return self
 
@@ -267,3 +294,28 @@ class BazelRegistry:
       json.dump(metadata, f, indent=4, sort_keys=True)
 
     return self
+
+  def createLocalPathModule(self, name, version, path, deps=None):
+    """Add a local module into the registry."""
+    module_dir = self.root.joinpath('modules', name, version)
+    module_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create source.json & copy patch files to the registry
+    source = {
+        'type': 'local_path',
+        'path': path,
+    }
+
+    if deps is None:
+      deps = {}
+
+    scratchFile(
+        module_dir.joinpath('MODULE.bazel'), [
+            'module(',
+            '  name = "%s",' % name,
+            '  version = "%s",' % version,
+            ')',
+        ] + ['bazel_dep(name="%s",version="%s")' % p for p in deps.items()])
+
+    with module_dir.joinpath('source.json').open('w') as f:
+      json.dump(source, f, indent=4, sort_keys=True)

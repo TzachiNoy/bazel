@@ -14,38 +14,36 @@
 
 package com.google.devtools.build.lib.starlarkbuildapi;
 
-import com.google.devtools.build.docgen.annot.DocumentMethods;
+import com.google.devtools.build.docgen.annot.GlobalMethods;
+import com.google.devtools.build.docgen.annot.GlobalMethods.Environment;
 import net.starlark.java.annot.Param;
 import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.StarlarkThread;
 
 /** A collection of global Starlark build API functions that belong in the global namespace. */
-@DocumentMethods
+@GlobalMethods(environment = Environment.BZL)
 public interface StarlarkBuildApiGlobals {
 
   @StarlarkMethod(
       name = "visibility",
-      // TODO(b/22193153): Link to a concepts page for bzl-visibility.
+      // TODO(b/22193153): Link to a concepts page for bzl-visibility. May require updating
+      // RuleLinkExpander to correctly link to within the /concepts directory.
       doc =
-          "<i>(Experimental; enabled by <code>--experimental_bzl_visibility</code>. This feature's"
-              + " API may change. Only packages that appear in"
-              + " <code>--experimental_bzl_visibility_allowlist</code> are permitted to call this"
-              + " function. Known issue: This feature currently may not work under bzlmod.)</i>"
-              + "<p>Sets the bzl-visibility of the .bzl module currently being initialized."
-              + "<p>The bzl-visibility of a module governs whether or not other BUILD and .bzl"
+          "<p>Sets the load visibility of the .bzl module currently being initialized."
+              + "<p>The load visibility of a module governs whether or not other BUILD and .bzl"
               + " files may load it. (This is distinct from the target visibility of the underlying"
               + " .bzl source file, which governs whether the file may appear as a dependency of"
-              + " other targets.) Bzl-visibility works at the level of packages: To load a"
-              + " module, the file doing the loading must live in a package that has been granted"
+              + " other targets.) Load visibility works at the level of packages: To load a module"
+              + " the file doing the loading must live in a package that has been granted"
               + " visibility to the module. A module can always be loaded within its own package,"
               + " regardless of its visibility."
               + "<p><code>visibility()</code> may only be called once per .bzl file, and only at"
               + " the top level, not inside a function. The preferred style is to put this call"
               + " immediately below the <code>load()</code> statements and any brief logic needed"
               + " to determine the argument."
-              + "<p>If the flag <code>--check_bzl_visibility</code> is set to false, bzl-visibility"
-              + " violations will emit warnings but not fail the build.",
+              + "<p>If the flag <code>--check_bzl_visibility</code> is set to false, load"
+              + " visibility violations will emit warnings but not fail the build.",
       parameters = {
         @Param(
             name = "value",
@@ -70,9 +68,12 @@ public interface StarlarkBuildApiGlobals {
                     + " specification. (An empty list has the same effect as <code>private</code>.)"
                     + " If <code>value</code> is a single string, it is treated as if it were the"
                     + " singleton list <code>[value]</code>."
-                    + "<p>Note that the specification <code>\"//...\"</code> is always interpreted"
-                    + " as \"all packages in the current repository\", regardless of the value of"
-                    + " the <code>--incompatible_fix_package_group_reporoot_syntax</code> flag.")
+                    + "<p>Note that the flags"
+                    + " <code>--incompatible_package_group_has_public_syntax</code> and"
+                    + " <code>--incompatible_fix_package_group_reporoot_syntax</code> have no"
+                    + " effect on this argument. The <code>\"public\"</code> and <code>\"private\""
+                    + "</code> values are always available, and <code>\"//...\"</code> is always"
+                    + " interpreted as \"all packages in the current repository\".")
       },
       // Ordinarily we'd use enableOnlyWithFlag here to gate access on
       // --experimental_bzl_visibility. However, the StarlarkSemantics isn't available at the point
@@ -88,13 +89,14 @@ public interface StarlarkBuildApiGlobals {
       // TODO(cparsons): Provide a link to documentation for available StarlarkConfigurationFields.
       doc =
           "References a late-bound default value for an attribute of type <a"
-              + " href=\"attr.html#label\">label</a>. A value is 'late-bound' if it requires the"
-              + " configuration to be built before determining the value. Any attribute using this"
-              + " as a value must <a href=\"https://bazel.build/rules/rules#private-attributes\">be"
-              + " private</a>. <p>Example usage: <p>Defining a rule attribute: <br><pre"
+              + " href=\"../toplevel/attr.html#label\">label</a>. A value is 'late-bound' if it"
+              + " requires the configuration to be built before determining the value. Any"
+              + " attribute using this as a value must <a"
+              + " href=\"https://bazel.build/extending/rules#private-attributes\">be private</a>."
+              + " <p>Example usage: <p>Defining a rule attribute: <br><pre"
               + " class=language-python>'_foo':"
-              + " attr.label(default=configuration_field(fragment='java', "
-              + "name='toolchain'))</pre><p>Accessing in rule implementation: <br><pre"
+              + " attr.label(default=configuration_field(fragment='java',"
+              + " name='toolchain'))</pre><p>Accessing in rule implementation: <br><pre"
               + " class=language-python>  def _rule_impl(ctx):\n"
               + "    foo_info = ctx.attr._foo\n"
               + "    ...</pre>",

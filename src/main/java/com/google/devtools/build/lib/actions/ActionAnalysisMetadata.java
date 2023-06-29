@@ -134,6 +134,15 @@ public interface ActionAnalysisMetadata {
   NestedSet<Artifact> getInputs();
 
   /**
+   * Returns the input Artifacts that must be built before the action can be executed, but are not
+   * dependencies of the action in the action cache.
+   *
+   * <p>Useful for actions that do input discovery: then these Artifacts will be readable during
+   * input discovery and then it can be decided which ones are actually necessary.
+   */
+  NestedSet<Artifact> getSchedulingDependencies();
+
+  /**
    * Returns the environment variables from the client environment that this action depends on. May
    * be empty.
    *
@@ -145,10 +154,11 @@ public interface ActionAnalysisMetadata {
   Collection<String> getClientEnvironmentVariables();
 
   /**
-   * Returns the (unordered, immutable) set of output Artifacts that this action generates. (It
-   * would not make sense for this to be empty.)
+   * Returns the output artifacts that this action generates.
+   *
+   * <p>The returned {@link Collection} is immutable, non-empty, and duplicate-free.
    */
-  ImmutableSet<Artifact> getOutputs();
+  Collection<Artifact> getOutputs();
 
   /**
    * Returns input files that need to be present to allow extra_action rules to shadow this action
@@ -186,7 +196,8 @@ public interface ActionAnalysisMetadata {
   Artifact getPrimaryInput();
 
   /**
-   * Returns the "primary" output of this action.
+   * Returns the "primary" output of this action, which is the same as the first artifact in {@link
+   * #getOutputs}.
    *
    * <p>For example, the linked library would be the primary output of a LinkAction.
    *

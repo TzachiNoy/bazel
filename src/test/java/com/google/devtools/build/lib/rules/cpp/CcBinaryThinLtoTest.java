@@ -153,7 +153,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
     assertThat(ActionsTestUtil.getFirstArtifactEndingWith(linkAction.getInputs(), "linkstamp.o"))
         .isNotNull();
 
-    List<String> commandLine = linkAction.getLinkCommandLine().getRawLinkArgv();
+    List<String> commandLine = linkAction.getLinkCommandLineForTesting().getRawLinkArgv();
     String prefix = getTargetConfiguration().getOutputDirectory(RepositoryName.MAIN)
         .getExecPathString();
     assertThat(commandLine)
@@ -278,7 +278,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
     */
     CppLinkAction linkAction = getLinkAction();
 
-    List<String> commandLine = linkAction.getLinkCommandLine().getRawLinkArgv();
+    List<String> commandLine = linkAction.getLinkCommandLineForTesting().getRawLinkArgv();
     String prefix = getTargetConfiguration().getOutputDirectory(RepositoryName.MAIN)
         .getExecPathString();
 
@@ -973,7 +973,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
     scratch.file("pkg/profile.afdo", "");
 
     setupThinLTOCrosstool(CppRuleClasses.AUTOFDO);
-    useConfiguration("--fdo_optimize=pkg/profile.afdo", "--compilation_mode=opt");
+    useConfiguration("--fdo_optimize=/pkg/profile.afdo", "--compilation_mode=opt");
 
     Artifact binArtifact = getFilesToBuild(getConfiguredTarget("//pkg:bin")).getSingleton();
 
@@ -1030,7 +1030,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
     scratch.file("pkg/profile.afdo", "");
 
     setupAutoFdoThinLtoCrosstool();
-    useConfiguration("--fdo_optimize=pkg/profile.afdo", "--compilation_mode=opt");
+    useConfiguration("--fdo_optimize=/pkg/profile.afdo", "--compilation_mode=opt");
 
     Artifact binArtifact = getFilesToBuild(getConfiguredTarget("//pkg:bin")).getSingleton();
 
@@ -1059,7 +1059,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
 
     setupAutoFdoThinLtoCrosstool();
     useConfiguration(
-        "--fdo_optimize=pkg/profile.afdo",
+        "--fdo_optimize=/pkg/profile.afdo",
         "--compilation_mode=opt",
         "--features=autofdo_implicit_thinlto");
 
@@ -1093,7 +1093,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
 
     setupAutoFdoThinLtoCrosstool();
     useConfiguration(
-        "--fdo_optimize=pkg/profile.afdo",
+        "--fdo_optimize=/pkg/profile.afdo",
         "--compilation_mode=opt",
         "--features=autofdo_implicit_thinlto",
         "--features=-thin_lto");
@@ -1129,7 +1129,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
 
     setupAutoFdoThinLtoCrosstool();
     useConfiguration(
-        "--fdo_optimize=pkg/profile.afdo",
+        "--fdo_optimize=/pkg/profile.afdo",
         "--compilation_mode=opt",
         "--features=autofdo_implicit_thinlto");
 
@@ -1164,7 +1164,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
 
     setupAutoFdoThinLtoCrosstool();
     useConfiguration(
-        "--fdo_optimize=pkg/profile.afdo",
+        "--fdo_optimize=/pkg/profile.afdo",
         "--compilation_mode=opt",
         "--features=autofdo_implicit_thinlto");
 
@@ -1203,7 +1203,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
     scratch.file("pkg/profile.zip", "");
 
     setupFdoThinLtoCrosstool();
-    useConfiguration("--fdo_optimize=pkg/profile.zip", "--compilation_mode=opt");
+    useConfiguration("--fdo_optimize=/pkg/profile.zip", "--compilation_mode=opt");
 
     Artifact binArtifact = getFilesToBuild(getConfiguredTarget("//pkg:bin")).getSingleton();
 
@@ -1232,7 +1232,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
 
     setupFdoThinLtoCrosstool();
     useConfiguration(
-        "--fdo_optimize=pkg/profile.zip",
+        "--fdo_optimize=/pkg/profile.zip",
         "--compilation_mode=opt",
         "--features=fdo_implicit_thinlto");
 
@@ -1266,7 +1266,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
 
     setupFdoThinLtoCrosstool();
     useConfiguration(
-        "--fdo_optimize=pkg/profile.zip",
+        "--fdo_optimize=/pkg/profile.zip",
         "--compilation_mode=opt",
         "--features=fdo_implicit_thinlto",
         "--features=-thin_lto");
@@ -1302,7 +1302,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
 
     setupFdoThinLtoCrosstool();
     useConfiguration(
-        "--fdo_optimize=pkg/profile.zip",
+        "--fdo_optimize=/pkg/profile.zip",
         "--compilation_mode=opt",
         "--features=fdo_implicit_thinlto");
 
@@ -1338,7 +1338,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
 
     setupFdoThinLtoCrosstool();
     useConfiguration(
-        "--fdo_optimize=pkg/profile.zip",
+        "--fdo_optimize=/pkg/profile.zip",
         "--compilation_mode=opt",
         "--features=fdo_implicit_thinlto");
 
@@ -1624,7 +1624,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
     assertThat(ActionsTestUtil.baseArtifactNames(linkAction.getInputs()))
         .contains("ld_profile.txt");
 
-    List<String> commandLine = linkAction.getLinkCommandLine().getRawLinkArgv();
+    List<String> commandLine = linkAction.getLinkCommandLineForTesting().getRawLinkArgv();
     assertThat(commandLine.toString())
         .containsMatch("-Wl,--symbol-ordering-file=.*/ld_profile.txt");
 
@@ -1803,7 +1803,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
         (CppLinkAction) getPredecessorByInputName(genruleAction, "pkg/gen_lib");
     assertThat(ActionsTestUtil.baseArtifactNames(hostLinkAction.getInputs()))
         .doesNotContain("ld_profile.txt");
-    assertThat(hostLinkAction.getLinkCommandLine().getRawLinkArgv().toString())
+    assertThat(hostLinkAction.getLinkCommandLineForTesting().getRawLinkArgv().toString())
         .doesNotContainMatch("-Wl,--symbol-ordering-file=.*/ld_profile.txt");
 
     LtoBackendAction hostBackendAction =
@@ -1819,7 +1819,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
     assertThat(hostIndexAction).isNotNull();
     assertThat(ActionsTestUtil.baseArtifactNames(hostIndexAction.getInputs()))
         .doesNotContain("ld_profile.txt");
-    assertThat(hostIndexAction.getLinkCommandLine().getRawLinkArgv().toString())
+    assertThat(hostIndexAction.getLinkCommandLineForTesting().getRawLinkArgv().toString())
         .doesNotContainMatch("-Wl,--symbol-ordering-file=.*/ld_profile.txt");
 
     CppCompileAction hostBitcodeAction =
@@ -1856,7 +1856,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
     CppLinkAction linkAction = (CppLinkAction) getGeneratingAction(binArtifact);
     assertThat(linkAction.getOutputs()).containsExactly(binArtifact);
 
-    List<String> commandLine = linkAction.getLinkCommandLine().getRawLinkArgv();
+    List<String> commandLine = linkAction.getLinkCommandLineForTesting().getRawLinkArgv();
     assertThat(commandLine.toString())
         .containsMatch("-Wl,--symbol-ordering-file=.*/ld_profile.txt");
 
@@ -1921,7 +1921,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
 
   @Test
   public void testFdoCachePrefetchAndFdoLLVMOptionsToBackendFromPath() throws Exception {
-    testLLVMCachePrefetchBackendOption("--fdo_optimize=./profile.zip", false);
+    testLLVMCachePrefetchBackendOption("--fdo_optimize=/profile.zip", false);
   }
 
   @Test
@@ -1931,7 +1931,7 @@ public class CcBinaryThinLtoTest extends BuildViewTestCase {
 
   @Test
   public void testFdoCachePrefetchAndFdoLLVMOptionsToBackendFromLabel() throws Exception {
-    testLLVMCachePrefetchBackendOption("--fdo_optimize=./profile.zip", true);
+    testLLVMCachePrefetchBackendOption("--fdo_optimize=/profile.zip", true);
   }
 
   @Test

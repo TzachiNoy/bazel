@@ -83,7 +83,9 @@ public final class BuildConfigurationFunction implements SkyFunction {
     BuildOptions targetOptions = key.getOptions();
 
     String transitionDirectoryNameFragment;
-    if (targetOptions
+    if (targetOptions.hasNoConfig()) {
+      transitionDirectoryNameFragment = "noconfig"; // See NoConfigTransition.
+    } else if (targetOptions
         .get(CoreOptions.class)
         .outputDirectoryNamingScheme
         .equals(CoreOptions.OutputDirectoryNamingScheme.DIFF_AGAINST_BASELINE)) {
@@ -138,7 +140,8 @@ public final class BuildConfigurationFunction implements SkyFunction {
    * Compute the hash for the new BuildOptions based on the names and values of all options (both
    * native and Starlark) that are different from some supplied baseline configuration.
    */
-  private static String computeNameFragmentWithDiff(
+  @VisibleForTesting
+  public static String computeNameFragmentWithDiff(
       BuildOptions toOptions, BuildOptions baselineOptions) {
     // Quick short-circuit for trivial case.
     if (toOptions.equals(baselineOptions)) {
@@ -244,7 +247,7 @@ public final class BuildConfigurationFunction implements SkyFunction {
     }
     for (String starlarkOptionName : chosenStarlark) {
       Object value =
-          toOptions.getStarlarkOptions().get(Label.parseAbsoluteUnchecked(starlarkOptionName));
+          toOptions.getStarlarkOptions().get(Label.parseCanonicalUnchecked(starlarkOptionName));
       toHash.put(starlarkOptionName, value);
     }
 

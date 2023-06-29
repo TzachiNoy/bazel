@@ -32,6 +32,7 @@ import com.google.common.util.concurrent.Uninterruptibles;
 import com.google.devtools.build.lib.actions.ActionLookupData;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authandtls.credentialhelper.CredentialModule;
 import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.bugreport.Crash;
 import com.google.devtools.build.lib.bugreport.CrashContext;
@@ -145,6 +146,7 @@ public final class BazelBuildEventServiceModuleTest extends BuildIntegrationTest
               }
             })
         .addBlazeModule(new NoSpawnCacheModule())
+        .addBlazeModule(new CredentialModule())
         .addBlazeModule(
             new BazelBuildEventServiceModule() {
               @Override
@@ -230,6 +232,16 @@ public final class BazelBuildEventServiceModuleTest extends BuildIntegrationTest
     assertThat(besModule.getBepTransports()).hasSize(1);
     assertThat(besModule.getBepTransports().asList().get(0))
         .isInstanceOf(BuildEventServiceTransport.class);
+  }
+
+  @Test
+  public void testRetryCount() throws Exception {
+    runBuildWithOptions(
+        "--bes_backend=does.not.exist:1234", "--experimental_build_event_upload_max_retries=3");
+    afterBuildCommand();
+
+    events.assertContainsError(
+        "The Build Event Protocol upload failed: All 3 retry attempts failed");
   }
 
   @Test
@@ -598,9 +610,11 @@ public final class BazelBuildEventServiceModuleTest extends BuildIntegrationTest
     runBuildWithOptions();
     BuildEventServiceOptions besOptions = new BuildEventServiceOptions();
     besOptions.besKeywords = ImmutableList.of("keyword0", "keyword1", "keyword0");
+    besOptions.besSystemKeywords = ImmutableList.of("sys_keyword0", "sys_keyword1", "sys_keyword0");
 
     assertThat(besModule.getBesKeywords(besOptions, null))
-        .containsExactly("user_keyword=keyword0", "user_keyword=keyword1");
+        .containsExactly(
+            "user_keyword=keyword0", "user_keyword=keyword1", "sys_keyword0", "sys_keyword1");
   }
 
   @Test

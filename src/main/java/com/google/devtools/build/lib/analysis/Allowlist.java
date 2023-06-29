@@ -50,7 +50,7 @@ public final class Allowlist {
   public static Attribute.Builder<Label> getAttributeFromAllowlistName(String allowlistName) {
     String attributeName = getAttributeNameFromAllowlistName(allowlistName).iterator().next();
     return attr(attributeName, LABEL)
-        .cfg(ExecutionTransitionFactory.create())
+        .cfg(ExecutionTransitionFactory.createFactory())
         .mandatoryProviders(PackageGroupConfiguredTarget.PROVIDER.id());
   }
 
@@ -117,9 +117,6 @@ public final class Allowlist {
       TransitiveInfoCollection packageGroup = ruleContext.getPrerequisite(attributeName);
       PackageSpecificationProvider packageSpecificationProvider =
           packageGroup.get(PackageGroupConfiguredTarget.PROVIDER);
-      if (packageSpecificationProvider == null) {
-        packageSpecificationProvider = packageGroup.get(PackageGroupConfiguredTarget.PROVIDER);
-      }
       return requireNonNull(packageSpecificationProvider, packageGroup.getLabel().toString());
     }
     return null;

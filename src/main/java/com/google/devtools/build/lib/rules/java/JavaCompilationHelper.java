@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.rules.java;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.devtools.build.lib.packages.ExecGroup.DEFAULT_EXEC_GROUP_NAME;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -72,9 +73,9 @@ public final class JavaCompilationHelper {
   private final JavaSemantics semantics;
   private final ImmutableList<Artifact> additionalInputsForDatabinding;
   private final StrictDepsMode strictJavaDeps;
-  private final String fixDepsTool;
   private boolean enableJspecify = true;
   private boolean enableDirectClasspath = true;
+  private final String execGroup;
 
   public JavaCompilationHelper(
       RuleContext ruleContext,
@@ -90,7 +91,12 @@ public final class JavaCompilationHelper {
     this.semantics = semantics;
     this.additionalInputsForDatabinding = additionalInputsForDatabinding;
     this.strictJavaDeps = getJavaConfiguration().getFilteredStrictJavaDeps();
-    this.fixDepsTool = getJavaConfiguration().getFixDepsTool();
+
+    if (ruleContext.useAutoExecGroups()) {
+      this.execGroup = semantics.getJavaToolchainType();
+    } else {
+      this.execGroup = DEFAULT_EXEC_GROUP_NAME;
+    }
   }
 
   public JavaCompilationHelper(
@@ -195,8 +201,7 @@ public final class JavaCompilationHelper {
     return builder.build();
   }
 
-  public void createCompileAction(JavaCompileOutputs<Artifact> outputs)
-      throws InterruptedException {
+  public void createCompileAction(JavaCompileOutputs<Artifact> outputs) {
     if (outputs.genClass() != null) {
       createGenJarAction(
           outputs.output(),
@@ -239,7 +244,7 @@ public final class JavaCompilationHelper {
               ? outputs.genSource()
               : turbineOutput(outputs.output(), "-turbine-apt-gensrc.jar");
 
-      JavaHeaderCompileActionBuilder builder = getJavaHeaderCompileActionBuilder();
+      JavaHeaderCompileAction.Builder builder = getJavaHeaderCompileActionBuilder();
       builder.setOutputJar(turbineJar);
       builder.setOutputDepsProto(turbineJdeps);
       builder.setPlugins(plugins);
@@ -294,12 +299,13 @@ public final class JavaCompilationHelper {
       javacopts =
           ImmutableList.<String>builder()
               .addAll(javacopts)
-              // Add JSpecify options last to discourage overridding them, at least for now.
+              // Add JSpecify options last to discourage overriding them, at least for now.
               .addAll(jspecifyInfo.jspecifyJavacopts())
               .build();
     }
 
-    JavaCompileActionBuilder builder = new JavaCompileActionBuilder(ruleContext, javaToolchain);
+    JavaCompileActionBuilder builder =
+        new JavaCompileActionBuilder(ruleContext, javaToolchain, execGroup);
 
     JavaClasspathMode classpathMode = getJavaConfiguration().getReduceJavaClasspath();
     builder.setClasspathMode(classpathMode);
@@ -363,9 +369,9 @@ public final class JavaCompilationHelper {
     if (coverageArtifact != null) {
       ruleContext.registerAction(
           new LazyWritePathsFileAction(
-              ruleContext.getActionOwner(),
+              ruleContext.getActionOwner(execGroup),
               coverageArtifact,
-              sourceFiles,
+              NestedSetBuilder.<Artifact>stableOrder().addAll(sourceFiles).build(),
               /* filesToIgnore= */ ImmutableSet.of(),
               false));
     }
@@ -523,8 +529,7 @@ public final class JavaCompilationHelper {
    *     for new artifacts.
    */
   private Artifact createHeaderCompilationAction(
-      Artifact runtimeJar, JavaCompilationArtifacts.Builder artifactBuilder)
-      throws InterruptedException {
+      Artifact runtimeJar, JavaCompilationArtifacts.Builder artifactBuilder) {
 
     Artifact headerJar = turbineOutput(runtimeJar, "-hjar.jar");
     Artifact headerDeps = turbineOutput(runtimeJar, "-hjar.jdeps");
@@ -534,7 +539,7 @@ public final class JavaCompilationHelper {
     // only run API-generating annotation processors during header compilation
     JavaPluginData plugins = attributes.plugins().apiGeneratingPlugins();
 
-    JavaHeaderCompileActionBuilder builder = getJavaHeaderCompileActionBuilder();
+    JavaHeaderCompileAction.Builder builder = getJavaHeaderCompileActionBuilder();
     builder.setOutputJar(headerJar);
     builder.setOutputDepsProto(headerDeps);
     builder.setPlugins(plugins);
@@ -552,9 +557,9 @@ public final class JavaCompilationHelper {
     return headerJar;
   }
 
-  private JavaHeaderCompileActionBuilder getJavaHeaderCompileActionBuilder() {
+  private JavaHeaderCompileAction.Builder getJavaHeaderCompileActionBuilder() {
     JavaTargetAttributes attributes = getAttributes();
-    JavaHeaderCompileActionBuilder builder = new JavaHeaderCompileActionBuilder(getRuleContext());
+    JavaHeaderCompileAction.Builder builder = JavaHeaderCompileAction.newBuilder(getRuleContext());
     builder.setSourceFiles(attributes.getSourceFiles());
     builder.setSourceJars(attributes.getSourceJars());
     builder.setClasspathEntries(attributes.getCompileTimeClassPath());
@@ -615,6 +620,7 @@ public final class JavaCompilationHelper {
                         .build())
                 .setProgressMessage("Building genclass jar %s", genClassJar.prettyPrint())
                 .setMnemonic("JavaSourceJar")
+                .setExecGroup(execGroup)
                 .build(getRuleContext()));
   }
 
@@ -635,14 +641,6 @@ public final class JavaCompilationHelper {
     return getJavaConfiguration().getGenerateJavaDeps() && attributes.hasSources();
   }
 
-  /**
-   * Creates and registers an Action that packages all of the resources into a Jar. This includes
-   * the declared resources, the classpath resources and the translated messages.
-   */
-  public void createResourceJarAction(Artifact resourceJar) {
-    createResourceJarAction(resourceJar, ImmutableList.<Artifact>of());
-  }
-
   private void createResourceJarAction(Artifact resourceJar, ImmutableList<Artifact> extraJars) {
     checkNotNull(resourceJar, "resource jar output must not be null");
     JavaTargetAttributes attributes = getAttributes();
@@ -656,7 +654,7 @@ public final class JavaCompilationHelper {
         .setTranslations(getTranslations())
         .setResourceJars(
             NestedSetBuilder.fromNestedSet(attributes.getResourceJars()).addAll(extraJars).build())
-        .build(semantics, ruleContext);
+        .build(semantics, ruleContext, execGroup);
   }
 
   /**
@@ -685,7 +683,8 @@ public final class JavaCompilationHelper {
         NestedSetBuilder.<Artifact>wrap(Order.STABLE_ORDER, attributes.getSourceFiles()),
         resourceJars.build(),
         outputJar,
-        javaToolchainProvider);
+        javaToolchainProvider,
+        execGroup);
   }
 
   public void createSourceJarAction(Artifact outputJar, @Nullable Artifact gensrcJar) {
@@ -700,7 +699,8 @@ public final class JavaCompilationHelper {
         semantics,
         NestedSetBuilder.<Artifact>wrap(Order.STABLE_ORDER, attributes.getSourceFiles()),
         resourceJars.build(),
-        outputJar);
+        outputJar,
+        execGroup);
   }
 
   /**
@@ -710,7 +710,7 @@ public final class JavaCompilationHelper {
    * @return the header jar (if requested), or ijar (if requested), or else the class jar
    */
   public Artifact createCompileTimeJarAction(
-      Artifact runtimeJar, JavaCompilationArtifacts.Builder builder) throws InterruptedException {
+      Artifact runtimeJar, JavaCompilationArtifacts.Builder builder) {
     Artifact jar;
     boolean isFullJar = false;
     if (shouldUseHeaderCompilation()) {
@@ -767,6 +767,7 @@ public final class JavaCompilationHelper {
                     ParamFileInfo.builder(ParameterFile.ParameterFileType.UNQUOTED).build())
                 .setProgressMessage("Optimizing jar %{label}")
                 .setMnemonic(mnemonic)
+                .setExecGroup(execGroup)
                 .build(getRuleContext()));
   }
 
@@ -843,11 +844,6 @@ public final class JavaCompilationHelper {
     return strictJavaDeps;
   }
 
-  /** Determines which tool to use when fixing dependency errors. */
-  public String getFixDepsTool() {
-    return fixDepsTool;
-  }
-
   /**
    * Gets the value of the "javacopts" attribute combining them with the default options. If the
    * current rule has no javacopts attribute, this method only returns the default options.
@@ -864,13 +860,6 @@ public final class JavaCompilationHelper {
   private ImmutableList<Artifact> getTranslations() {
     translationsFrozen = true;
     return ImmutableList.copyOf(translations);
-  }
-
-  /**
-   * Returns the javac bootclasspath artifacts from the given toolchain (if it has any) or the rule.
-   */
-  public static BootClassPathInfo getBootClasspath(JavaToolchainProvider javaToolchain) {
-    return javaToolchain.getBootclasspath();
   }
 
   /**

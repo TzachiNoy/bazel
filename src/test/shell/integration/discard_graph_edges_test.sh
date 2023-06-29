@@ -202,7 +202,6 @@ load(":bar.bzl", "bar")
 load(":baz.bzl", "baz")
 cc_library(name = 'cclib', srcs = ['cclib.cc'])
 genrule(name = 'histodump',
-        srcs = glob(["*.in"]),
         outs = ['histo.txt'],
         local = 1,
         tools = [':cclib'],
@@ -261,7 +260,7 @@ function test_packages_cleared() {
   local edgeless_entry_count="$(extract_histogram_count "$histo_file" \
        'EdgelessInMemoryNodeEntry')"
   [[ "$edgeless_entry_count" -eq 0 ]] \
-      || fail "$edgless_entry_count EdgelessInMemoryNodeEntry instances found in build keeping edges"
+      || fail "$edgeless_entry_count EdgelessInMemoryNodeEntry instances found in build keeping edges"
   local node_entry_count="$(extract_histogram_count "$histo_file" \
        '\.InMemoryNodeEntry')"
   [[ "$node_entry_count" -ge 100 ]] \

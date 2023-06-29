@@ -88,9 +88,6 @@ public interface JavaSemantics {
   FileType PROPERTIES = FileType.of(".properties");
   FileType SOURCE_JAR = FileType.of(".srcjar");
 
-  /** Label to the Java Toolchain rule. It is resolved from a label given in the java options. */
-  String JAVA_TOOLCHAIN_LABEL = "//tools/jdk:toolchain";
-
   /** The java_toolchain.compatible_javacopts key for Android javacopts */
   public static final String ANDROID_JAVACOPTS_KEY = "android";
   /** The java_toolchain.compatible_javacopts key for proto compilations. */
@@ -109,38 +106,37 @@ public interface JavaSemantics {
   String DIRECT_SOURCE_JARS_OUTPUT_GROUP =
       OutputGroupInfo.HIDDEN_OUTPUT_GROUP_PREFIX + "direct_source_jars";
 
-  /**
-   * Implementation for the :java_launcher attribute. Note that the Java launcher is disabled by
-   * default, so it returns null for the configuration-independent default value.
-   */
-  @SerializationConstant
-  LabelLateBoundDefault<JavaConfiguration> JAVA_LAUNCHER =
-      LabelLateBoundDefault.fromTargetConfiguration(
-          JavaConfiguration.class,
-          null,
-          (rule, attributes, javaConfig) -> {
-            // This nullness check is purely for the sake of a test that doesn't bother to include
-            // an
-            // attribute map when calling this method.
-            if (attributes != null) {
-              // Don't depend on the launcher if we don't create an executable anyway
-              if (attributes.has("create_executable")
-                  && !attributes.get("create_executable", Type.BOOLEAN)) {
-                return null;
-              }
+  public String getJavaToolchainType();
 
-              // use_launcher=False disables the launcher
-              if (attributes.has("use_launcher") && !attributes.get("use_launcher", Type.BOOLEAN)) {
-                return null;
-              }
-
-              // don't read --java_launcher if this target overrides via a launcher attribute
-              if (attributes.isAttributeValueExplicitlySpecified("launcher")) {
-                return attributes.get("launcher", LABEL);
-              }
+  /** Implementation for the :java_launcher attribute. */
+  static LabelLateBoundDefault<JavaConfiguration> javaLauncherAttribute(Label defaultLabel) {
+    return LabelLateBoundDefault.fromTargetConfiguration(
+        JavaConfiguration.class,
+        defaultLabel,
+        (rule, attributes, javaConfig) -> {
+          // This nullness check is purely for the sake of a test that doesn't bother to include
+          // an
+          // attribute map when calling this method.
+          if (attributes != null) {
+            // Don't depend on the launcher if we don't create an executable anyway
+            if (attributes.has("create_executable")
+                && !attributes.get("create_executable", Type.BOOLEAN)) {
+              return null;
             }
-            return javaConfig.getJavaLauncherLabel();
-          });
+
+            // use_launcher=False disables the launcher
+            if (attributes.has("use_launcher") && !attributes.get("use_launcher", Type.BOOLEAN)) {
+              return null;
+            }
+
+            // don't read --java_launcher if this target overrides via a launcher attribute
+            if (attributes.isAttributeValueExplicitlySpecified("launcher")) {
+              return attributes.get("launcher", LABEL);
+            }
+          }
+          return javaConfig.getJavaLauncherLabel();
+        });
+  }
 
   @SerializationConstant
   LabelListLateBoundDefault<JavaConfiguration> JAVA_PLUGINS =
@@ -155,13 +151,6 @@ public interface JavaSemantics {
           JavaConfiguration.class,
           null,
           (rule, attributes, javaConfig) -> javaConfig.getProguardBinary());
-
-  @SerializationConstant
-  LabelListLateBoundDefault<JavaConfiguration> EXTRA_PROGUARD_SPECS =
-      LabelListLateBoundDefault.fromTargetConfiguration(
-          JavaConfiguration.class,
-          (rule, attributes, javaConfig) ->
-              ImmutableList.copyOf(javaConfig.getExtraProguardSpecs()));
 
   @SerializationConstant
   LabelLateBoundDefault<JavaConfiguration> BYTECODE_OPTIMIZER =
@@ -248,7 +237,7 @@ public interface JavaSemantics {
    * Returns the resources contributed by a Java rule (usually the contents of the {@code resources}
    * attribute)
    */
-  ImmutableList<Artifact> collectResources(RuleContext ruleContext);
+  ImmutableList<Artifact> collectResources(RuleContext ruleContext) throws RuleErrorException;
 
   String getTestRunnerMainClass();
 
@@ -259,6 +248,7 @@ public interface JavaSemantics {
   CustomCommandLine buildSingleJarCommandLine(
       String toolchainIdentifier,
       Artifact output,
+      Label label,
       String mainClass,
       ImmutableList<String> manifestLines,
       Iterable<Artifact> buildInfoFiles,
@@ -276,6 +266,9 @@ public interface JavaSemantics {
       NestedSet<Artifact> hermeticInputs,
       NestedSet<String> addExports,
       NestedSet<String> addOpens);
+
+  ImmutableList<Artifact> getBuildInfo(RuleContext ruleContext, int stamp)
+      throws RuleErrorException, InterruptedException;
 
   /**
    * Creates the action that writes the Java executable stub script.

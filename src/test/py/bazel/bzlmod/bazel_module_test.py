@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+# pylint: disable=g-long-ternary
 
 import os
 import pathlib
@@ -20,6 +21,7 @@ import unittest
 
 from src.test.py.bazel import test_base
 from src.test.py.bazel.bzlmod.test_utils import BazelRegistry
+from src.test.py.bazel.bzlmod.test_utils import scratchFile
 
 
 class BazelModuleTest(test_base.TestBase):
@@ -29,29 +31,32 @@ class BazelModuleTest(test_base.TestBase):
     self.registries_work_dir = tempfile.mkdtemp(dir=self._test_cwd)
     self.main_registry = BazelRegistry(
         os.path.join(self.registries_work_dir, 'main'))
-    self.main_registry.createCcModule('aaa', '1.0') \
-        .createCcModule('aaa', '1.1') \
-        .createCcModule('bbb', '1.0', {'aaa': '1.0'}, {'aaa': 'com_foo_aaa'}) \
-        .createCcModule('bbb', '1.1', {'aaa': '1.1'}) \
-        .createCcModule('ccc', '1.1', {'aaa': '1.1', 'bbb': '1.1'}) \
-        .createCcModule('ddd', '1.0', {'yanked1': '1.0', 'yanked2': '1.0'}) \
-        .createCcModule('eee', '1.0', {'yanked1': '1.0'}) \
-        .createCcModule('yanked1', '1.0') \
-        .createCcModule('yanked2', '1.0') \
-        .addMetadata('yanked1', yanked_versions={'1.0': 'dodgy'}) \
-        .addMetadata('yanked2', yanked_versions={'1.0': 'sketchy'})
+    self.main_registry.createCcModule('aaa', '1.0').createCcModule(
+        'aaa', '1.1'
+    ).createCcModule(
+        'bbb', '1.0', {'aaa': '1.0'}, {'aaa': 'com_foo_aaa'}
+    ).createCcModule(
+        'bbb', '1.1', {'aaa': '1.1'}
+    ).createCcModule(
+        'ccc', '1.1', {'aaa': '1.1', 'bbb': '1.1'}
+    )
     self.ScratchFile(
         '.bazelrc',
         [
             # In ipv6 only network, this has to be enabled.
             # 'startup --host_jvm_args=-Djava.net.preferIPv6Addresses=true',
-            'common --experimental_enable_bzlmod',
-            'common --registry=' + self.main_registry.getURL(),
+            'build --enable_bzlmod',
+            'build --registry=' + self.main_registry.getURL(),
             # We need to have BCR here to make sure built-in modules like
             # bazel_tools can work.
-            'common --registry=https://bcr.bazel.build',
-            'common --verbose_failures',
-        ])
+            'build --registry=https://bcr.bazel.build',
+            'build --verbose_failures',
+            # Set an explicit Java language version
+            'build --java_language_version=8',
+            'build --tool_java_language_version=8',
+            'build --lockfile_mode=update',
+        ],
+    )
     self.ScratchFile('WORKSPACE')
     # The existence of WORKSPACE.bzlmod prevents WORKSPACE prefixes or suffixes
     # from being used; this allows us to test built-in modules actually work
@@ -143,115 +148,6 @@ class BazelModuleTest(test_base.TestBase):
     self.assertIn('main function => aaa@1.1', stdout)
     self.assertIn('main function => bbb@1.0', stdout)
     self.assertIn('bbb@1.0 => aaa@1.1', stdout)
-
-  def testSingleVersionOverrideWithPatch(self):
-    self.writeMainProjectFiles()
-    self.ScratchFile(
-        'MODULE.bazel',
-        [
-            'bazel_dep(name = "aaa", version = "1.1")',
-            'bazel_dep(name = "bbb", version = "1.1")',
-            # Both main and bbb@1.1 has to depend on the locally patched aaa@1.0
-            'single_version_override(',
-            '  module_name = "aaa",',
-            '  version = "1.0",',
-            '  patches = ["//:aaa.patch"],',
-            '  patch_strip = 1,',
-            ')',
-        ])
-    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
-    self.assertIn('main function => aaa@1.0 (locally patched)', stdout)
-    self.assertIn('main function => bbb@1.1', stdout)
-    self.assertIn('bbb@1.1 => aaa@1.0 (locally patched)', stdout)
-
-  def testRegistryOverride(self):
-    self.writeMainProjectFiles()
-    another_registry = BazelRegistry(
-        os.path.join(self.registries_work_dir, 'another'),
-        ' from another registry')
-    another_registry.createCcModule('aaa', '1.0')
-    self.ScratchFile('MODULE.bazel', [
-        'bazel_dep(name = "aaa", version = "1.0")',
-        'bazel_dep(name = "bbb", version = "1.0")',
-        'single_version_override(',
-        '  module_name = "aaa",',
-        '  registry = "%s",' % another_registry.getURL(),
-        ')',
-    ])
-    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
-    self.assertIn('main function => aaa@1.0 from another registry', stdout)
-    self.assertIn('main function => bbb@1.0', stdout)
-    self.assertIn('bbb@1.0 => aaa@1.0 from another registry', stdout)
-
-  def testArchiveOverride(self):
-    self.writeMainProjectFiles()
-    archive_aaa_1_0 = self.main_registry.archives.joinpath('aaa.1.0.zip')
-    self.ScratchFile('MODULE.bazel', [
-        'bazel_dep(name = "aaa", version = "1.1")',
-        'bazel_dep(name = "bbb", version = "1.1")',
-        'archive_override(',
-        '  module_name = "aaa",',
-        '  urls = ["%s"],' % archive_aaa_1_0.as_uri(),
-        '  patches = ["//:aaa.patch"],',
-        '  patch_strip = 1,',
-        ')',
-    ])
-    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
-    self.assertIn('main function => aaa@1.0 (locally patched)', stdout)
-    self.assertIn('main function => bbb@1.1', stdout)
-    self.assertIn('bbb@1.1 => aaa@1.0 (locally patched)', stdout)
-
-  def testGitOverride(self):
-    self.writeMainProjectFiles()
-
-    src_aaa_1_0 = self.main_registry.projects.joinpath('aaa', '1.0')
-    self.RunProgram(['git', 'init'], cwd=src_aaa_1_0, allow_failure=False)
-    self.RunProgram(['git', 'config', 'user.name', 'tester'],
-                    cwd=src_aaa_1_0,
-                    allow_failure=False)
-    self.RunProgram(['git', 'config', 'user.email', 'tester@foo.com'],
-                    cwd=src_aaa_1_0,
-                    allow_failure=False)
-    self.RunProgram(['git', 'add', './'], cwd=src_aaa_1_0, allow_failure=False)
-    self.RunProgram(['git', 'commit', '-m', 'Initial commit.'],
-                    cwd=src_aaa_1_0,
-                    allow_failure=False)
-    _, stdout, _ = self.RunProgram(['git', 'rev-parse', 'HEAD'],
-                                   cwd=src_aaa_1_0,
-                                   allow_failure=False)
-    commit = stdout[0].strip()
-
-    self.ScratchFile('MODULE.bazel', [
-        'bazel_dep(name = "aaa", version = "1.1")',
-        'bazel_dep(name = "bbb", version = "1.1")',
-        'git_override(',
-        '  module_name = "aaa",',
-        '  remote = "%s",' % src_aaa_1_0.as_uri(),
-        '  commit = "%s",' % commit,
-        '  patches = ["//:aaa.patch"],',
-        '  patch_strip = 1,',
-        ')',
-    ])
-    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
-    self.assertIn('main function => aaa@1.0 (locally patched)', stdout)
-    self.assertIn('main function => bbb@1.1', stdout)
-    self.assertIn('bbb@1.1 => aaa@1.0 (locally patched)', stdout)
-
-  def testLocalPathOverride(self):
-    src_aaa_1_0 = self.main_registry.projects.joinpath('aaa', '1.0')
-    self.writeMainProjectFiles()
-    self.ScratchFile('MODULE.bazel', [
-        'bazel_dep(name = "aaa", version = "1.1")',
-        'bazel_dep(name = "bbb", version = "1.1")',
-        'local_path_override(',
-        '  module_name = "aaa",',
-        '  path = "%s",' % str(src_aaa_1_0.resolve()).replace('\\', '/'),
-        ')',
-    ])
-    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
-    self.assertIn('main function => aaa@1.0', stdout)
-    self.assertIn('main function => bbb@1.1', stdout)
-    self.assertIn('bbb@1.1 => aaa@1.0', stdout)
 
   def testRemotePatchForBazelDep(self):
     patch_file = self.ScratchFile('aaa.patch', [
@@ -363,49 +259,13 @@ class BazelModuleTest(test_base.TestBase):
                                          allow_failure=True)
     self.AssertExitCode(exit_code, 48, stderr)
     self.assertIn(
-        "ERROR: <builtin>: //pkg:~module_ext~foo: no such attribute 'invalid_attr' in 'repo_rule' rule",
+        "ERROR: <builtin>: //pkg:_main~module_ext~foo: no such attribute 'invalid_attr' in 'repo_rule' rule",
         stderr)
     self.assertTrue(
         any([
             '/pkg/extension.bzl", line 3, column 14, in _module_ext_impl'
             in line for line in stderr
         ]))
-
-  def testCommandLineModuleOverride(self):
-    self.ScratchFile('MODULE.bazel', [
-        'bazel_dep(name = "ss", version = "1.0")',
-        'local_path_override(',
-        '  module_name = "ss",',
-        '  path = "%s",' % self.Path('aa'),
-        ')',
-    ])
-    self.ScratchFile('BUILD')
-    self.ScratchFile('WORKSPACE')
-
-    self.ScratchFile('aa/MODULE.bazel', [
-        'module(name=\'ss\')',
-    ])
-    self.ScratchFile('aa/BUILD', [
-        'filegroup(name = "never_ever")',
-    ])
-    self.ScratchFile('aa/WORKSPACE')
-
-    self.ScratchFile('bb/MODULE.bazel', [
-        'module(name=\'ss\')',
-    ])
-    self.ScratchFile('bb/BUILD', [
-        'filegroup(name = "choose_me")',
-    ])
-    self.ScratchFile('bb/WORKSPACE')
-
-    _, _, stderr = self.RunBazel([
-        'build', '--experimental_enable_bzlmod', '@ss//:all',
-        '--override_module', 'ss=' + self.Path('bb')
-    ],
-                                 allow_failure=False)
-    # module file override should be ignored, and bb directory should be used
-    self.assertIn(
-        'Target @ss~override//:choose_me up-to-date (nothing to build)', stderr)
 
   def testDownload(self):
     data_path = self.ScratchFile('data.txt', ['some data'])
@@ -432,104 +292,304 @@ class BazelModuleTest(test_base.TestBase):
     ])
     self.RunBazel(['build', '@no_op//:no_op'], allow_failure=False)
 
-  def testNonRegistryOverriddenModulesIgnoreYanked(self):
-    src_yanked1 = self.main_registry.projects.joinpath('yanked1', '1.0')
-    self.ScratchFile('MODULE.bazel', [
-        'bazel_dep(name = "yanked1", version = "1.0")', 'local_path_override(',
-        '  module_name = "yanked1",',
-        '  path = "%s",' % str(src_yanked1.resolve()).replace('\\', '/'), ')'
-    ])
-    self.ScratchFile('WORKSPACE')
-    self.ScratchFile('BUILD', [
-        'cc_binary(',
-        '  name = "main",',
-        '  srcs = ["main.cc"],',
-        '  deps = ["@yanked1//:lib_yanked1"],',
-        ')',
-    ])
-    self.RunBazel(['build', '--nobuild', '//:main'], allow_failure=False)
+  def setUpProjectWithLocalRegistryModule(self, dep_name, dep_version):
+    self.main_registry.generateCcSource(dep_name, dep_version)
+    self.main_registry.createLocalPathModule(dep_name, dep_version,
+                                             dep_name + '/' + dep_version)
 
-  def testContainingYankedDepFails(self):
-    self.ScratchFile('MODULE.bazel', [
-        'bazel_dep(name = "yanked1", version = "1.0")',
+    self.ScratchFile('main.cc', [
+        '#include "%s.h"' % dep_name,
+        'int main() {',
+        '    hello_%s("main function");' % dep_name,
+        '}',
     ])
-    self.ScratchFile('WORKSPACE')
+    self.ScratchFile('MODULE.bazel', [
+        'bazel_dep(name = "%s", version = "%s")' % (dep_name, dep_version),
+    ])
     self.ScratchFile('BUILD', [
         'cc_binary(',
         '  name = "main",',
         '  srcs = ["main.cc"],',
-        '  deps = ["@ddd//:lib_ddd"],',
+        '  deps = ["@%s//:lib_%s"],' % (dep_name, dep_name),
         ')',
     ])
-    exit_code, _, stderr = self.RunBazel(['build', '--nobuild', '//:main'],
-                                         allow_failure=True)
-    self.AssertExitCode(exit_code, 48, stderr)
+    self.ScratchFile('WORKSPACE', [])
+
+  def testLocalRepoInSourceJsonAbsoluteBasePath(self):
+    self.main_registry.setModuleBasePath(str(self.main_registry.projects))
+    self.setUpProjectWithLocalRegistryModule('sss', '1.3')
+    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
+    self.assertIn('main function => sss@1.3', stdout)
+
+  def testLocalRepoInSourceJsonRelativeBasePath(self):
+    self.main_registry.setModuleBasePath('projects')
+    self.setUpProjectWithLocalRegistryModule('sss', '1.3')
+    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
+    self.assertIn('main function => sss@1.3', stdout)
+
+  def testNativePackageRelativeLabel(self):
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'module(name="foo")',
+            'bazel_dep(name="bar")',
+            'local_path_override(module_name="bar",path="bar")',
+        ],
+    )
+    self.ScratchFile('WORKSPACE')
+    self.ScratchFile('BUILD')
+    self.ScratchFile(
+        'defs.bzl',
+        [
+            'def mac(name):',
+            '  native.filegroup(name=name)',
+            '  print("1st: " + str(native.package_relative_label(":bleb")))',
+            '  print("2nd: " + str(native.package_relative_label('
+            + '"//bleb:bleb")))',
+            '  print("3rd: " + str(native.package_relative_label('
+            + '"@bleb//bleb:bleb")))',
+            '  print("4th: " + str(native.package_relative_label("//bleb")))',
+            '  print("5th: " + str(native.package_relative_label('
+            + '"@@bleb//bleb:bleb")))',
+            '  print("6th: " + str(native.package_relative_label(Label('
+            + '"//bleb"))))',
+        ],
+    )
+
+    self.ScratchFile(
+        'bar/MODULE.bazel',
+        [
+            'module(name="bar")',
+            'bazel_dep(name="foo", repo_name="bleb")',
+        ],
+    )
+    self.ScratchFile('bar/WORKSPACE')
+    self.ScratchFile(
+        'bar/quux/BUILD',
+        [
+            'load("@bleb//:defs.bzl", "mac")',
+            'mac(name="book")',
+        ],
+    )
+
+    _, _, stderr = self.RunBazel(
+        ['build', '@bar//quux:book'], allow_failure=False
+    )
+    stderr = '\n'.join(stderr)
+    self.assertIn('1st: @@bar~override//quux:bleb', stderr)
+    self.assertIn('2nd: @@bar~override//bleb:bleb', stderr)
+    self.assertIn('3rd: @@//bleb:bleb', stderr)
+    self.assertIn('4th: @@bar~override//bleb:bleb', stderr)
+    self.assertIn('5th: @@bleb//bleb:bleb', stderr)
+    self.assertIn('6th: @@//bleb:bleb', stderr)
+
+  def testWorkspaceEvaluatedBzlCanSeeRootModuleMappings(self):
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'bazel_dep(name="aaa",version="1.0")',
+            'bazel_dep(name="bbb",version="1.0")',
+        ],
+    )
+    self.ScratchFile(
+        'WORKSPACE.bzlmod',
+        [
+            'local_repository(name="foo", path="foo", repo_mapping={',
+            '  "@bar":"@baz",',
+            '  "@my_aaa":"@aaa",',
+            '})',
+            'load("@foo//:test.bzl", "test")',
+            'test()',
+        ],
+    )
+    self.ScratchFile('foo/WORKSPACE')
+    self.ScratchFile('foo/BUILD', ['filegroup(name="test")'])
+    self.ScratchFile(
+        'foo/test.bzl',
+        [
+            'def test():',
+            '  print("1st: " + str(Label("@bar//:z")))',
+            '  print("2nd: " + str(Label("@my_aaa//:z")))',
+            '  print("3rd: " + str(Label("@bbb//:z")))',
+            '  print("4th: " + str(Label("@blarg//:z")))',
+        ],
+    )
+
+    _, _, stderr = self.RunBazel(['build', '@foo//:test'], allow_failure=False)
+    stderr = '\n'.join(stderr)
+    # @bar is mapped to @@baz, which Bzlmod doesn't recognize, so we leave it be
+    self.assertIn('1st: @@baz//:z', stderr)
+    # @my_aaa is mapped to @@aaa, which Bzlmod remaps to @@aaa~1.0
+    self.assertIn('2nd: @@aaa~1.0//:z', stderr)
+    # @bbb isn't mapped in WORKSPACE, but Bzlmod maps it to @@bbb~1.0
+    self.assertIn('3rd: @@bbb~1.0//:z', stderr)
+    # @blarg isn't mapped by WORKSPACE or Bzlmod
+    self.assertIn('4th: @@blarg//:z', stderr)
+
+  def testWorkspaceItselfCanSeeRootModuleMappings(self):
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'bazel_dep(name="hello")',
+            'local_path_override(module_name="hello",path="hello")',
+        ],
+    )
+    self.ScratchFile(
+        'WORKSPACE.bzlmod',
+        [
+            'load("@hello//:world.bzl", "message")',
+            'print(message)',
+        ],
+    )
+    self.ScratchFile('BUILD', ['filegroup(name="a")'])
+    self.ScratchFile('hello/WORKSPACE')
+    self.ScratchFile('hello/BUILD')
+    self.ScratchFile('hello/MODULE.bazel', ['module(name="hello")'])
+    self.ScratchFile('hello/world.bzl', ['message="I LUV U!"'])
+
+    _, _, stderr = self.RunBazel(['build', ':a'], allow_failure=False)
+    self.assertIn('I LUV U!', '\n'.join(stderr))
+
+  def testArchiveWithArchiveType(self):
+    # make the archive without the .zip extension
+    self.main_registry.createCcModule(
+        'aaa', '1.2', archive_pattern='%s.%s', archive_type='zip'
+    )
+
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'bazel_dep(name = "aaa", version = "1.2")',
+        ],
+    )
+    self.ScratchFile(
+        'BUILD',
+        [
+            'cc_binary(',
+            '  name = "main",',
+            '  srcs = ["main.cc"],',
+            '  deps = ["@aaa//:lib_aaa"],',
+            ')',
+        ],
+    )
+    self.ScratchFile(
+        'main.cc',
+        [
+            '#include "aaa.h"',
+            'int main() {',
+            '    hello_aaa("main function");',
+            '}',
+        ],
+    )
+    _, stdout, _ = self.RunBazel(['run', '//:main'], allow_failure=False)
+    self.assertIn('main function => aaa@1.2', stdout)
+
+  def testNativeModuleNameAndVersion(self):
+    self.main_registry.setModuleBasePath('projects')
+    projects_dir = self.main_registry.projects
+
+    self.ScratchFile(
+        'MODULE.bazel',
+        [
+            'module(name="root",version="0.1")',
+            'bazel_dep(name="foo",version="1.0")',
+            'report_ext = use_extension("@foo//:ext.bzl", "report_ext")',
+            'use_repo(report_ext, "report_repo")',
+            'bazel_dep(name="bar")',
+            'local_path_override(module_name="bar",path="bar")',
+        ],
+    )
+    self.ScratchFile('WORKSPACE')
+    self.ScratchFile(
+        'WORKSPACE.bzlmod', ['local_repository(name="quux",path="quux")']
+    )
+    self.ScratchFile(
+        'BUILD',
+        [
+            'load("@foo//:report.bzl", "report")',
+            'report()',
+        ],
+    )
+    # foo: a repo defined by a normal Bazel module. Also hosts the extension
+    #      `report_ext` which generates a repo `report_repo`.
+    self.main_registry.createLocalPathModule('foo', '1.0', 'foo')
+    projects_dir.joinpath('foo').mkdir(exist_ok=True)
+    scratchFile(projects_dir.joinpath('foo', 'WORKSPACE'))
+    scratchFile(
+        projects_dir.joinpath('foo', 'BUILD'),
+        [
+            'load(":report.bzl", "report")',
+            'report()',
+        ],
+    )
+    scratchFile(
+        projects_dir.joinpath('foo', 'report.bzl'),
+        [
+            'def report():',
+            '  repo = native.repository_name()',
+            '  name = str(native.module_name())',
+            '  version = str(native.module_version())',
+            '  print("@" + repo + " reporting in: " + name + "@" + version)',
+            '  native.filegroup(name="a")',
+        ],
+    )
+    scratchFile(
+        projects_dir.joinpath('foo', 'ext.bzl'),
+        [
+            'def _report_repo(rctx):',
+            '  rctx.file("BUILD",',
+            '    "load(\\"@foo//:report.bzl\\", \\"report\\")\\n" +',
+            '    "report()")',
+            'report_repo = repository_rule(_report_repo)',
+            'report_ext = module_extension(',
+            '  lambda mctx: report_repo(name="report_repo"))',
+        ],
+    )
+    # bar: a repo defined by a Bazel module with a non-registry override
+    self.ScratchFile('bar/WORKSPACE')
+    self.ScratchFile(
+        'bar/MODULE.bazel',
+        [
+            'module(name="bar", version="2.0")',
+            'bazel_dep(name="foo",version="1.0")',
+        ],
+    )
+    self.ScratchFile(
+        'bar/BUILD',
+        [
+            'load("@foo//:report.bzl", "report")',
+            'report()',
+        ],
+    )
+    # quux: a repo defined by WORKSPACE
+    self.ScratchFile('quux/WORKSPACE')
+    self.ScratchFile(
+        'quux/BUILD',
+        [
+            'load("@foo//:report.bzl", "report")',
+            'report()',
+        ],
+    )
+
+    _, _, stderr = self.RunBazel(
+        [
+            'build',
+            ':a',
+            '@foo//:a',
+            '@report_repo//:a',
+            '@bar//:a',
+            '@quux//:a',
+        ],
+        allow_failure=False,
+    )
+    stderr = '\n'.join(stderr)
+    self.assertIn('@@ reporting in: root@0.1', stderr)
+    self.assertIn('@@foo~1.0 reporting in: foo@1.0', stderr)
     self.assertIn(
-        'Yanked version detected in your resolved dependency graph: ' +
-        'yanked1@1.0, for the reason: dodgy.', ''.join(stderr))
-
-  def testAllowedYankedDepsSuccessByFlag(self):
-    self.ScratchFile('MODULE.bazel', [
-        'bazel_dep(name = "ddd", version = "1.0")',
-    ])
-    self.ScratchFile('WORKSPACE')
-    self.ScratchFile('BUILD', [
-        'cc_binary(',
-        '  name = "main",',
-        '  srcs = ["main.cc"],',
-        '  deps = ["@ddd//:lib_ddd"],',
-        ')',
-    ])
-    self.RunBazel([
-        'build', '--nobuild', '--allow_yanked_versions=yanked1@1.0,yanked2@1.0',
-        '//:main'
-    ],
-                  allow_failure=False)
-
-  def testAllowedYankedDepsByEnvVar(self):
-    self.ScratchFile('MODULE.bazel', [
-        'bazel_dep(name = "ddd", version = "1.0")',
-    ])
-    self.ScratchFile('WORKSPACE')
-    self.ScratchFile('BUILD', [
-        'cc_binary(',
-        '  name = "main",',
-        '  srcs = ["main.cc"],',
-        '  deps = ["@ddd//:lib_ddd"],',
-        ')',
-    ])
-    self.RunBazel(
-        ['build', '--nobuild', '//:main'],
-        env_add={'BZLMOD_ALLOW_YANKED_VERSIONS': 'yanked1@1.0,yanked2@1.0'},
-        allow_failure=False)
-
-    # Test changing the env var, the build should fail again.
-    exit_code, _, stderr = self.RunBazel(
-        ['build', '--nobuild', '//:main'],
-        env_add={'BZLMOD_ALLOW_YANKED_VERSIONS': 'yanked2@1.0'},
-        allow_failure=True)
-    self.AssertExitCode(exit_code, 48, stderr)
-    self.assertIn(
-        'Yanked version detected in your resolved dependency graph: ' +
-        'yanked1@1.0, for the reason: dodgy.', ''.join(stderr))
-
-  def testAllowedYankedDepsSuccessMix(self):
-    self.ScratchFile('MODULE.bazel', [
-        'bazel_dep(name = "ddd", version = "1.0")',
-    ])
-    self.ScratchFile('WORKSPACE')
-    self.ScratchFile('BUILD', [
-        'cc_binary(',
-        '  name = "main",',
-        '  srcs = ["main.cc"],',
-        '  deps = ["@ddd//:lib_ddd"],',
-        ')',
-    ])
-    self.RunBazel([
-        'build', '--nobuild', '--allow_yanked_versions=yanked1@1.0', '//:main'
-    ],
-                  env_add={'BZLMOD_ALLOW_YANKED_VERSIONS': 'yanked2@1.0'},
-                  allow_failure=False)
+        '@@foo~1.0~report_ext~report_repo reporting in: foo@1.0', stderr
+    )
+    self.assertIn('@@bar~override reporting in: bar@2.0', stderr)
+    self.assertIn('@@quux reporting in: None@None', stderr)
 
 
 if __name__ == '__main__':

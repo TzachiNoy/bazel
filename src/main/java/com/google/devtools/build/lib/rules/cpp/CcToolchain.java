@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.cpp;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
@@ -29,6 +30,8 @@ import com.google.devtools.build.lib.cmdline.Label;
 import java.io.Serializable;
 import java.util.HashMap;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkFunction;
 import net.starlark.java.syntax.Location;
 
 /**
@@ -50,14 +53,14 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
       "@bazel_tools//tools/build_defs/cc/whitelists/parse_headers_and_layering_check:"
           + ALLOWED_LAYERING_CHECK_FEATURES_ALLOWLIST;
   public static final Label ALLOWED_LAYERING_CHECK_FEATURES_LABEL =
-      Label.parseAbsoluteUnchecked(ALLOWED_LAYERING_CHECK_FEATURES_TARGET);
+      Label.parseCanonicalUnchecked(ALLOWED_LAYERING_CHECK_FEATURES_TARGET);
 
   public static final String LOOSE_HEADER_CHECK_ALLOWLIST =
       "loose_header_check_allowed_in_toolchain";
   public static final String LOOSE_HEADER_CHECK_TARGET =
       "@bazel_tools//tools/build_defs/cc/whitelists/starlark_hdrs_check:" + LOOSE_HEADER_CHECK_ALLOWLIST;
   public static final Label LOOSE_HEADER_CHECK_LABEL =
-      Label.parseAbsoluteUnchecked(LOOSE_HEADER_CHECK_TARGET);
+      Label.parseCanonicalUnchecked(LOOSE_HEADER_CHECK_TARGET);
 
   @Override
   @Nullable
@@ -86,10 +89,22 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
           .build();
     }
 
+    StarlarkFunction getCcToolchainProvider =
+        (StarlarkFunction) ruleContext.getStarlarkDefinedBuiltin("get_cc_toolchain_provider");
+    ruleContext.initStarlarkRuleContext();
+    Object starlarkCcToolchainProvider =
+        ruleContext.callStarlarkOrThrowRuleError(
+            getCcToolchainProvider,
+            ImmutableList.of(
+                /* ctx */ ruleContext.getStarlarkRuleContext(), /* attributes */ attributes),
+            ImmutableMap.of());
+
     // This is a platforms-backed build, we will not analyze cc_toolchain_suite at all, and we are
     // sure current cc_toolchain is the one selected. We can create CcToolchainProvider here.
     CcToolchainProvider ccToolchainProvider =
-        CcToolchainProviderHelper.getCcToolchainProvider(ruleContext, attributes);
+        starlarkCcToolchainProvider != Starlark.NONE
+            ? (CcToolchainProvider) starlarkCcToolchainProvider
+            : null;
 
     if (ccToolchainProvider == null) {
       // Skyframe restart
@@ -147,7 +162,7 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
 
   /** Returns a function that will be called to retrieve root {@link CcToolchainVariables}. */
   protected AdditionalBuildVariablesComputer getAdditionalBuildVariablesComputer(
-      RuleContext ruleContextPossiblyInHostConfiguration) {
+      RuleContext ruleContextPossiblyInExecConfiguration) {
     return (AdditionalBuildVariablesComputer & Serializable)
         (options) -> CcToolchainVariables.EMPTY;
   }

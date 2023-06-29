@@ -76,56 +76,76 @@ function has_utf8_locale() {
   [[ "${charmap}" == "UTF-8" ]]
 }
 
-function setup_credential_helper() {
+function setup_credential_helper_test() {
+  # Each helper call atomically writes one byte to this file.
+  # We can later read the file to determine how many calls were made.
+  cat > "${TEST_TMPDIR}/credhelper_log"
+
   cat > "${TEST_TMPDIR}/credhelper" <<'EOF'
 #!/usr/bin/env python3
+import os
+
+path = os.path.join(os.environ["TEST_TMPDIR"], "credhelper_log")
+fd = os.open(path, os.O_WRONLY|os.O_CREAT|os.O_APPEND)
+os.write(fd, b"1")
+os.close(fd)
+
 print("""{"headers":{"Authorization":["Bearer secret_token"]}}""")
 EOF
   chmod +x "${TEST_TMPDIR}/credhelper"
+
+  mkdir -p a
+
+  cat > a/BUILD <<'EOF'
+[genrule(
+  name = x,
+  outs = [x + ".txt"],
+  cmd = "touch $(OUTS)",
+) for x in ["a", "b"]]
+EOF
+
+  stop_worker
+  start_worker --expected_authorization_token=secret_token
+}
+
+function expect_credential_helper_calls() {
+  local -r expected=$1
+  local -r actual=$(wc -c "${TEST_TMPDIR}/credhelper_log" | awk '{print $1}')
+  if [[ "$expected" != "$actual" ]]; then
+    fail "expected $expected instead of $actual credential helper calls"
+  fi
 }
 
 function test_credential_helper_remote_cache() {
-  setup_credential_helper
-
-  mkdir -p a
-
-  cat > a/BUILD <<'EOF'
-genrule(
-  name = "a",
-  outs = ["a.txt"],
-  cmd = "touch $(OUTS)",
-)
-EOF
-
-  stop_worker
-  start_worker --expected_authorization_token=secret_token
+  setup_credential_helper_test
 
   bazel build \
       --remote_cache=grpc://localhost:${worker_port} \
       //a:a >& $TEST_log && fail "Build without credentials should have failed"
   expect_log "Failed to query remote execution capabilities"
 
+  # Helper shouldn't have been called yet.
+  expect_credential_helper_calls 0
+
   bazel build \
       --remote_cache=grpc://localhost:${worker_port} \
       --experimental_credential_helper="${TEST_TMPDIR}/credhelper" \
       //a:a >& $TEST_log || fail "Build with credentials should have succeeded"
+
+  # First build should have called helper for 4 distinct URIs.
+  expect_credential_helper_calls 4
+
+  bazel build \
+      --remote_cache=grpc://localhost:${worker_port} \
+      --experimental_credential_helper="${TEST_TMPDIR}/credhelper" \
+      //a:b >& $TEST_log || fail "Build with credentials should have succeeded"
+
+  # Second build should have hit the credentials cache.
+  expect_credential_helper_calls 4
 }
 
 function test_credential_helper_remote_execution() {
-  setup_credential_helper
-
-  mkdir -p a
-
-  cat > a/BUILD <<'EOF'
-genrule(
-  name = "a",
-  outs = ["a.txt"],
-  cmd = "touch $(OUTS)",
-)
-EOF
-
-  stop_worker
-  start_worker --expected_authorization_token=secret_token
+  setup_credential_helper_test
 
   bazel build \
       --spawn_strategy=remote \
@@ -133,11 +153,49 @@ EOF
       //a:a >& $TEST_log && fail "Build without credentials should have failed"
   expect_log "Failed to query remote execution capabilities"
 
+  # Helper shouldn't have been called yet.
+  expect_credential_helper_calls 0
+
   bazel build \
       --spawn_strategy=remote \
       --remote_executor=grpc://localhost:${worker_port} \
       --experimental_credential_helper="${TEST_TMPDIR}/credhelper" \
       //a:a >& $TEST_log || fail "Build with credentials should have succeeded"
+
+  # First build should have called helper for 5 distinct URIs.
+  expect_credential_helper_calls 5
+
+  bazel build \
+      --spawn_strategy=remote \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --experimental_credential_helper="${TEST_TMPDIR}/credhelper" \
+      //a:b >& $TEST_log || fail "Build with credentials should have succeeded"
+
+  # Second build should have hit the credentials cache.
+  expect_credential_helper_calls 5
+}
+
+function test_credential_helper_clear_cache() {
+  setup_credential_helper_test
+
+  bazel build \
+      --spawn_strategy=remote \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --experimental_credential_helper="${TEST_TMPDIR}/credhelper" \
+      //a:a >& $TEST_log || fail "Build with credentials should have succeeded"
+
+  expect_credential_helper_calls 5
+
+  bazel clean
+
+  bazel build \
+      --spawn_strategy=remote \
+      --remote_executor=grpc://localhost:${worker_port} \
+      --experimental_credential_helper="${TEST_TMPDIR}/credhelper" \
+      //a:b >& $TEST_log || fail "Build with credentials should have succeeded"
+
+  # Build after clean should have called helper again.
+  expect_credential_helper_calls 10
 }
 
 function test_remote_grpc_cache_with_protocol() {
@@ -1987,12 +2045,10 @@ sh_test(
 EOF
 
   bazel test \
-    --incompatible_exclusive_test_sandboxed \
     --remote_cache=grpc://localhost:${worker_port} \
     //a:success_test || fail "Failed to test //a:success_test"
 
   bazel test \
-    --incompatible_exclusive_test_sandboxed \
     --remote_cache=grpc://localhost:${worker_port} \
     --nocache_test_results \
     //a:success_test >& $TEST_log || fail "Failed to test //a:success_test"
@@ -2145,6 +2201,13 @@ function test_empty_tree_artifact_as_inputs() {
   bazel build \
     --spawn_strategy=remote \
     --remote_executor=grpc://localhost:${worker_port} \
+    --experimental_remote_discard_merkle_trees \
+    //pkg:a &>$TEST_log || fail "expected build to succeed with Merkle tree discarding"
+
+  bazel clean --expunge
+  bazel build \
+    --spawn_strategy=remote \
+    --remote_executor=grpc://localhost:${worker_port} \
     --experimental_sibling_repository_layout \
     //pkg:a &>$TEST_log || fail "expected build to succeed with sibling repository layout"
 }
@@ -2212,6 +2275,15 @@ function test_create_tree_artifact_outputs() {
     --remote_executor=grpc://localhost:${worker_port} \
     --experimental_remote_merkle_tree_cache \
     //pkg:a &>$TEST_log || fail "expected build to succeed with Merkle tree cache"
+  [[ -f bazel-bin/pkg/a/non_empty_dir/out ]] || fail "expected tree artifact to contain a file"
+  [[ -d bazel-bin/pkg/a/empty_dir ]] || fail "expected directory to exist"
+
+  bazel clean --expunge
+  bazel build \
+    --spawn_strategy=remote \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --experimental_remote_discard_merkle_trees \
+    //pkg:a &>$TEST_log || fail "expected build to succeed with Merkle tree discarding"
   [[ -f bazel-bin/pkg/a/non_empty_dir/out ]] || fail "expected tree artifact to contain a file"
   [[ -d bazel-bin/pkg/a/empty_dir ]] || fail "expected directory to exist"
 
@@ -2421,261 +2493,6 @@ EOF
     --flaky_test_attempts=2 \
     //a:test >& $TEST_log  && fail "expected failure" || true
   expect_not_log "WARNING: Remote Cache:"
-}
-
-function test_uploader_respect_no_cache() {
-  mkdir -p a
-  cat > a/BUILD <<EOF
-genrule(
-  name = 'foo',
-  outs = ["foo.txt"],
-  cmd = "echo \"foo bar\" > \$@",
-  tags = ["no-cache"],
-)
-EOF
-
-  bazel build \
-      --remote_cache=grpc://localhost:${worker_port} \
-      --incompatible_remote_build_event_upload_respect_no_cache \
-      --build_event_json_file=bep.json \
-      //a:foo >& $TEST_log || fail "Failed to build"
-
-  cat bep.json > $TEST_log
-  expect_not_log "a:foo.*bytestream://" || fail "local files are converted"
-  expect_log "command.profile.gz.*bytestream://" || fail "should upload profile data"
-}
-
-function test_uploader_respect_no_cache_minimal() {
-  mkdir -p a
-  cat > a/BUILD <<EOF
-genrule(
-  name = 'foo',
-  outs = ["foo.txt"],
-  cmd = "echo \"foo bar\" > \$@",
-  tags = ["no-cache"],
-)
-EOF
-
-  bazel build \
-      --remote_cache=grpc://localhost:${worker_port} \
-      --remote_download_minimal \
-      --incompatible_remote_build_event_upload_respect_no_cache \
-      --build_event_json_file=bep.json \
-      //a:foo >& $TEST_log || fail "Failed to build"
-
-  cat bep.json > $TEST_log
-  expect_not_log "a:foo.*bytestream://" || fail "local files are converted"
-  expect_log "command.profile.gz.*bytestream://" || fail "should upload profile data"
-}
-
-function test_uploader_alias_action_respect_no_cache() {
-  mkdir -p a
-  cat > a/BUILD <<EOF
-genrule(
-  name = 'foo',
-  outs = ["foo.txt"],
-  cmd = "echo \"foo bar\" > \$@",
-  tags = ["no-cache"],
-)
-
-alias(
-  name = 'foo-alias',
-  actual = '//a:foo',
-)
-EOF
-
-  bazel build \
-      --remote_cache=grpc://localhost:${worker_port} \
-      --incompatible_remote_build_event_upload_respect_no_cache \
-      --build_event_json_file=bep.json \
-      //a:foo-alias >& $TEST_log || fail "Failed to build"
-
-  cat bep.json > $TEST_log
-  expect_not_log "a:foo.*bytestream://"
-  expect_log "command.profile.gz.*bytestream://"
-}
-
-function test_uploader_respect_no_cache_trees() {
-  mkdir -p a
-  cat > a/output_dir.bzl <<'EOF'
-def _gen_output_dir_impl(ctx):
-    output_dir = ctx.actions.declare_directory(ctx.attr.outdir)
-    ctx.actions.run_shell(
-        outputs = [output_dir],
-        inputs = [],
-        command = """
-          mkdir -p $1/sub; \
-          index=0; while ((index<10)); do echo $index >$1/$index.txt; index=$(($index+1)); done
-          echo "Shuffle, duffle, muzzle, muff" > $1/sub/bar
-        """,
-        arguments = [output_dir.path],
-        execution_requirements = {"no-cache": ""},
-    )
-    return [
-        DefaultInfo(files = depset(direct = [output_dir])),
-    ]
-gen_output_dir = rule(
-    implementation = _gen_output_dir_impl,
-    attrs = {
-        "outdir": attr.string(mandatory = True),
-    },
-)
-EOF
-
-  cat > a/BUILD <<EOF
-load(":output_dir.bzl", "gen_output_dir")
-gen_output_dir(
-    name = "foo",
-    outdir = "dir",
-)
-EOF
-
-  bazel build \
-      --remote_cache=grpc://localhost:${worker_port} \
-      --incompatible_remote_build_event_upload_respect_no_cache \
-      --build_event_json_file=bep.json \
-      //a:foo >& $TEST_log || fail "Failed to build"
-
-  cat bep.json > $TEST_log
-  expect_not_log "a:foo.*bytestream://" || fail "local tree files are converted"
-  expect_not_log "a/dir/.*bytestream://" || fail "local tree files are converted"
-  expect_log "command.profile.gz.*bytestream://" || fail "should upload profile data"
-}
-
-function test_uploader_respect_no_upload_results() {
-  mkdir -p a
-  cat > a/BUILD <<EOF
-genrule(
-  name = 'foo',
-  outs = ["foo.txt"],
-  cmd = "echo \"foo bar\" > \$@",
-)
-EOF
-
-  bazel build \
-      --remote_cache=grpc://localhost:${worker_port} \
-      --remote_upload_local_results=false \
-      --incompatible_remote_build_event_upload_respect_no_cache \
-      --build_event_json_file=bep.json \
-      //a:foo >& $TEST_log || fail "Failed to build"
-
-  cat bep.json > $TEST_log
-  expect_not_log "a:foo.*bytestream://" || fail "local files are converted"
-  expect_log "command.profile.gz.*bytestream://" || fail "should upload profile data"
-}
-
-function test_uploader_respect_no_upload_results_combined_cache() {
-  mkdir -p a
-  cat > a/BUILD <<EOF
-genrule(
-  name = 'foo',
-  outs = ["foo.txt"],
-  cmd = "echo \"foo bar\" > \$@",
-)
-EOF
-
-  cache_dir=$(mktemp -d)
-
-  bazel build \
-      --remote_cache=grpc://localhost:${worker_port} \
-      --disk_cache=$cache_dir \
-      --remote_upload_local_results=false \
-      --incompatible_remote_build_event_upload_respect_no_cache \
-      --build_event_json_file=bep.json \
-      //a:foo >& $TEST_log || fail "Failed to build"
-
-  cat bep.json > $TEST_log
-  expect_not_log "a:foo.*bytestream://" || fail "local files are converted"
-  expect_log "command.profile.gz.*bytestream://" || fail "should upload profile data"
-  remote_cas_files="$(count_remote_cas_files)"
-  [[ "$remote_cas_files" == 1 ]] || fail "Expected 1 remote cas entries, not $remote_cas_files"
-}
-
-function test_remote_exec_convert_remote_file() {
-  mkdir -p a
-  cat > a/BUILD <<'EOF'
-sh_test(
-  name = "test",
-  srcs = ["test.sh"],
-)
-EOF
-  cat > a/test.sh <<'EOF'
-#!/bin/bash
-set -e
-echo \"foo\"
-exit 0
-EOF
-  chmod 755 a/test.sh
-
-  bazel test \
-    --remote_executor=grpc://localhost:${worker_port} \
-    --build_event_json_file=bep.json \
-    --noremote_upload_local_results \
-    --incompatible_remote_build_event_upload_respect_no_cache \
-    //a:test >& $TEST_log || fail "Failed to test //a:test"
-
-  cat bep.json > $TEST_log
-  expect_not_log "test\.log.*file://" || fail "remote files generated in remote execution are not converted"
-  expect_log "test\.log.*bytestream://" || fail "remote files generated in remote execution are not converted"
-}
-
-
-function test_uploader_ignore_disk_cache_of_combined_cache() {
-  mkdir -p a
-  cat > a/BUILD <<EOF
-genrule(
-  name = 'foo',
-  outs = ["foo.txt"],
-  cmd = "echo \"foo bar\" > \$@",
-  tags = ["no-cache"],
-)
-EOF
-
-  cache_dir=$(mktemp -d)
-
-  bazel build \
-      --remote_cache=grpc://localhost:${worker_port} \
-      --disk_cache=$cache_dir \
-      --incompatible_remote_build_event_upload_respect_no_cache \
-      --build_event_json_file=bep.json \
-      //a:foo >& $TEST_log || fail "Failed to build"
-
-  cat bep.json > $TEST_log
-  expect_not_log "a:foo.*bytestream://" || fail "local files are converted"
-  expect_log "command.profile.gz.*bytestream://" || fail "should upload profile data"
-
-  disk_cas_files="$(count_disk_cas_files $cache_dir)"
-  [[ "$disk_cas_files" == 0 ]] || fail "Expected 0 disk cas entries, not $disk_cas_files"
-}
-
-function test_uploader_incompatible_remote_results_ignore_disk() {
-  mkdir -p a
-  cat > a/BUILD <<EOF
-genrule(
-  name = 'foo',
-  outs = ["foo.txt"],
-  cmd = "echo \"foo bar\" > \$@",
-  tags = ["no-remote"],
-)
-EOF
-
-  cache_dir=$(mktemp -d)
-
-  bazel build \
-      --remote_cache=grpc://localhost:${worker_port} \
-      --disk_cache=$cache_dir \
-      --incompatible_remote_build_event_upload_respect_no_cache \
-      --incompatible_remote_results_ignore_disk \
-      --build_event_json_file=bep.json \
-      //a:foo >& $TEST_log || fail "Failed to build"
-
-  cat bep.json > $TEST_log
-  expect_not_log "a:foo.*bytestream://" || fail "local files are converted"
-  expect_log "command.profile.gz.*bytestream://" || fail "should upload profile data"
-
-  disk_cas_files="$(count_disk_cas_files $cache_dir)"
-  # foo.txt, stdout and stderr for action 'foo'
-  [[ "$disk_cas_files" == 3 ]] || fail "Expected 3 disk cas entries, not $disk_cas_files"
 }
 
 function test_missing_outputs_dont_upload_action_result() {
@@ -3022,7 +2839,6 @@ EOF
   bazel \
     --windows_enable_symlinks \
     build \
-    --experimental_allow_unresolved_symlinks \
     --spawn_strategy=remote \
     --remote_executor=grpc://localhost:${worker_port} \
     //pkg:b &>$TEST_log || fail "expected build to succeed"
@@ -3035,11 +2851,19 @@ EOF
   bazel \
     --windows_enable_symlinks \
     build \
-    --experimental_allow_unresolved_symlinks \
     --spawn_strategy=remote \
     --remote_executor=grpc://localhost:${worker_port} \
     --experimental_remote_merkle_tree_cache \
     //pkg:b &>$TEST_log || fail "expected build to succeed with Merkle tree cache"
+
+  bazel clean --expunge
+  bazel \
+    --windows_enable_symlinks \
+    build \
+    --spawn_strategy=remote \
+    --remote_executor=grpc://localhost:${worker_port} \
+    --experimental_remote_discard_merkle_trees \
+    //pkg:b &>$TEST_log || fail "expected build to succeed with Merkle tree discarding"
 
   if [[ "$(cat bazel-bin/pkg/b.txt)" != "$link_target" ]]; then
     fail "expected symlink target to be $link_target"
@@ -3060,6 +2884,132 @@ function test_unresolved_symlink_spawn_relative() {
 
 function test_unresolved_symlink_spawn_absolute() {
   do_test_unresolved_symlink spawn /non/existent
+}
+
+function setup_cc_binary_tool_with_dynamic_deps() {
+  local repo=$1
+
+  cat >> WORKSPACE <<'EOF'
+local_repository(
+  name = "other_repo",
+  path = "other_repo",
+)
+EOF
+
+  mkdir -p $repo
+  touch $repo/WORKSPACE
+
+  mkdir -p $repo/lib
+  # Use a comma in the target name as that is known to be problematic whith -Wl,
+  # which is commonly used to pass rpaths to the linker.
+  cat > $repo/lib/BUILD <<'EOF'
+cc_binary(
+  name = "l,ib",
+  srcs = ["lib.cpp"],
+  linkshared = True,
+  linkstatic = True,
+)
+
+cc_import(
+  name = "dynamic_l,ib",
+  shared_library = ":l,ib",
+  hdrs = ["lib.h"],
+  visibility = ["//visibility:public"],
+)
+EOF
+  cat > $repo/lib/lib.h <<'EOF'
+void print_greeting();
+EOF
+  cat > $repo/lib/lib.cpp <<'EOF'
+#include <cstdio>
+void print_greeting() {
+  printf("Hello, world!\n");
+}
+EOF
+
+  mkdir -p $repo/pkg
+  cat > $repo/pkg/BUILD <<'EOF'
+cc_binary(
+  name = "tool",
+  srcs = ["tool.cpp"],
+  deps = ["//lib:dynamic_l,ib"],
+)
+
+genrule(
+  name = "rule",
+  outs = ["out"],
+  cmd = "$(location :tool) > $@",
+  tools = [":tool"],
+)
+EOF
+  cat > $repo/pkg/tool.cpp <<'EOF'
+#include "lib/lib.h"
+int main() {
+  print_greeting();
+}
+EOF
+}
+
+function test_cc_binary_tool_with_dynamic_deps() {
+  if [[ "$PLATFORM" == "darwin" ]]; then
+    # TODO(b/37355380): This test is disabled due to RemoteWorker not supporting
+    # setting SDKROOT and DEVELOPER_DIR appropriately, as is required of
+    # action executors in order to select the appropriate Xcode toolchain.
+    return 0
+  fi
+
+  setup_cc_binary_tool_with_dynamic_deps .
+
+  bazel build \
+      --remote_executor=grpc://localhost:${worker_port} \
+      //pkg:rule >& $TEST_log || fail "Build should succeed"
+}
+
+function test_cc_binary_tool_with_dynamic_deps_sibling_repository_layout() {
+  if [[ "$PLATFORM" == "darwin" ]]; then
+    # TODO(b/37355380): This test is disabled due to RemoteWorker not supporting
+    # setting SDKROOT and DEVELOPER_DIR appropriately, as is required of
+    # action executors in order to select the appropriate Xcode toolchain.
+    return 0
+  fi
+
+  setup_cc_binary_tool_with_dynamic_deps .
+
+  bazel build \
+      --experimental_sibling_repository_layout \
+      --remote_executor=grpc://localhost:${worker_port} \
+      //pkg:rule >& $TEST_log || fail "Build should succeed"
+}
+
+function test_external_cc_binary_tool_with_dynamic_deps() {
+  if [[ "$PLATFORM" == "darwin" ]]; then
+    # TODO(b/37355380): This test is disabled due to RemoteWorker not supporting
+    # setting SDKROOT and DEVELOPER_DIR appropriately, as is required of
+    # action executors in order to select the appropriate Xcode toolchain.
+    return 0
+  fi
+
+  setup_cc_binary_tool_with_dynamic_deps other_repo
+
+  bazel build \
+      --remote_executor=grpc://localhost:${worker_port} \
+      @other_repo//pkg:rule >& $TEST_log || fail "Build should succeed"
+}
+
+function test_external_cc_binary_tool_with_dynamic_deps_sibling_repository_layout() {
+  if [[ "$PLATFORM" == "darwin" ]]; then
+    # TODO(b/37355380): This test is disabled due to RemoteWorker not supporting
+    # setting SDKROOT and DEVELOPER_DIR appropriately, as is required of
+    # action executors in order to select the appropriate Xcode toolchain.
+    return 0
+  fi
+
+  setup_cc_binary_tool_with_dynamic_deps other_repo
+
+  bazel build \
+      --experimental_sibling_repository_layout \
+      --remote_executor=grpc://localhost:${worker_port} \
+      @other_repo//pkg:rule >& $TEST_log || fail "Build should succeed"
 }
 
 run_suite "Remote execution and remote cache tests"

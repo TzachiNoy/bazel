@@ -89,7 +89,8 @@ public abstract class PostAnalysisQueryHelper<T> extends AbstractQueryHelper<T> 
     MockObjcSupport.setup(mockToolsConfig);
   }
 
-  public void cleanUp() {
+  @Override
+  public final void cleanUp() {
     for (Method method : getMethodsAnnotatedWith(AnalysisHelper.class, After.class)) {
       try {
         method.invoke(analysisHelper);
@@ -343,11 +344,6 @@ public abstract class PostAnalysisQueryHelper<T> extends AbstractQueryHelper<T> 
     @Override
     protected BuildConfigurationValue getTargetConfiguration() throws InterruptedException {
       return super.getTargetConfiguration();
-    }
-
-    @Override
-    public BuildConfigurationValue getHostConfiguration() {
-      return super.getHostConfiguration();
     }
 
     @Override

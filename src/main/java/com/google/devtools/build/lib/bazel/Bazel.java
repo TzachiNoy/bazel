@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.bazel;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
+import com.google.devtools.build.lib.authandtls.credentialhelper.CredentialModule;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import java.io.IOException;
@@ -42,6 +43,8 @@ public final class Bazel {
           // This module needs to be registered before any module providing a SpawnCache
           // implementation.
           com.google.devtools.build.lib.runtime.NoSpawnCacheModule.class,
+          // This module needs to be registered before any module that uses the credential cache.
+          CredentialModule.class,
           com.google.devtools.build.lib.runtime.CommandLogModule.class,
           com.google.devtools.build.lib.runtime.MemoryPressureModule.class,
           com.google.devtools.build.lib.platform.SleepPreventionModule.class,
@@ -73,6 +76,7 @@ public final class Bazel {
           com.google.devtools.build.lib.buildeventservice.BazelBuildEventServiceModule.class,
           com.google.devtools.build.lib.profiler.callcounts.CallcountsModule.class,
           com.google.devtools.build.lib.profiler.memory.AllocationTrackerModule.class,
+          com.google.devtools.build.lib.profiler.CommandProfilerModule.class,
           com.google.devtools.build.lib.metrics.PostGCMemoryUseRecorder
               .PostGCMemoryUseRecorderModule.class,
           com.google.devtools.build.lib.metrics.PostGCMemoryUseRecorder.GcAfterBuildModule.class,
@@ -81,6 +85,7 @@ public final class Bazel {
           com.google.devtools.build.lib.runtime.ExecutionGraphModule.class,
           BazelBuiltinCommandModule.class,
           com.google.devtools.build.lib.includescanning.IncludeScanningModule.class,
+          com.google.devtools.build.lib.skyframe.SkymeldModule.class,
           // This module needs to be registered after any module submitting tasks with its {@code
           // submit} method.
           com.google.devtools.build.lib.runtime.BlockWaitingModule.class);

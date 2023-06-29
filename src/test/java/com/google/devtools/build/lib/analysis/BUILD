@@ -1,6 +1,7 @@
 load("@rules_java//java:defs.bzl", "java_library", "java_test")
 
 package(
+    default_applicable_licenses = ["//:license"],
     default_testonly = 1,
     default_visibility = ["//src:__subpackages__"],
 )
@@ -9,13 +10,13 @@ filegroup(
     name = "srcs",
     testonly = 0,
     srcs = glob(["**"]) + [
+        "//src/test/java/com/google/devtools/build/lib/analysis/allowlisting:srcs",
         "//src/test/java/com/google/devtools/build/lib/analysis/extra:srcs",
         "//src/test/java/com/google/devtools/build/lib/analysis/mock:srcs",
         "//src/test/java/com/google/devtools/build/lib/analysis/platform:srcs",
         "//src/test/java/com/google/devtools/build/lib/analysis/starlark/annotations/processor:srcs",
         "//src/test/java/com/google/devtools/build/lib/analysis/testing:srcs",
         "//src/test/java/com/google/devtools/build/lib/analysis/util:srcs",
-        "//src/test/java/com/google/devtools/build/lib/analysis/allowlisting:srcs",
     ],
     visibility = ["//src:__subpackages__"],
 )
@@ -35,8 +36,10 @@ java_library(
             "JDKJavaLauncherRunfilesSupportTest.java",
             "PackageGroupBuildViewTest.java",
             "RuleConfiguredTargetTest.java",
+            "RunfilesRepoMappingManifestTest.java",
             "SourceManifestActionTest.java",
             "AnalysisFailureInfoTest.java",
+            "config/FeatureSetTest.java",
         ],
     ),
     deps = [
@@ -51,11 +54,13 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions:thread_state_receiver",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/abstract_file_write_action",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/binary_file_write_action",
+        "//src/main/java/com/google/devtools/build/lib/analysis:actions/buildinfo_file_write_action",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/compression",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/custom_command_line",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/deterministic_writer",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/file_write_action_context",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/launcher_file_write_action",
+        "//src/main/java/com/google/devtools/build/lib/analysis:actions/lazy_write_paths_file_action",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/parameter_file_write_action",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/spawn_action_template",
         "//src/main/java/com/google/devtools/build/lib/analysis:actions/substitution",
@@ -72,14 +77,12 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis:config/build_options",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/build_options_cache",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/compilation_mode",
-        "//src/main/java/com/google/devtools/build/lib/analysis:config/config_aware_aspect_builder",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/core_options",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/execution_info_modifier",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/execution_transition_factory",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment_options",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment_registry",
-        "//src/main/java/com/google/devtools/build/lib/analysis:config/host_transition",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/per_label_options",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/run_under",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/run_under_converter",
@@ -88,6 +91,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/composing_transition",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/composing_transition_factory",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/configuration_transition",
+        "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/no_config_transition",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/no_transition",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/null_transition",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/transitions/patch_transition",
@@ -106,9 +110,11 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/analysis:required_config_fragments_provider",
         "//src/main/java/com/google/devtools/build/lib/analysis:resolved_toolchain_context",
         "//src/main/java/com/google/devtools/build/lib/analysis:rule_definition_environment",
+        "//src/main/java/com/google/devtools/build/lib/analysis:rule_error_consumer",
         "//src/main/java/com/google/devtools/build/lib/analysis:server_directories",
         "//src/main/java/com/google/devtools/build/lib/analysis:starlark/args",
         "//src/main/java/com/google/devtools/build/lib/analysis:starlark/starlark_custom_command_line",
+        "//src/main/java/com/google/devtools/build/lib/analysis:starlark/starlark_exec_group_collection",
         "//src/main/java/com/google/devtools/build/lib/analysis:target_and_configuration",
         "//src/main/java/com/google/devtools/build/lib/analysis:test/instrumented_files_info",
         "//src/main/java/com/google/devtools/build/lib/analysis:test/test_configuration",
@@ -149,6 +155,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/skyframe:toolchain_exception",
         "//src/main/java/com/google/devtools/build/lib/skyframe:unloaded_toolchain_context",
         "//src/main/java/com/google/devtools/build/lib/skyframe:unloaded_toolchain_context_impl",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:workspace_status_value",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/testutils",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/testutils:depsutils",
@@ -180,6 +187,7 @@ java_library(
         "//src/test/java/com/google/devtools/build/lib/testutil:JunitUtils",
         "//src/test/java/com/google/devtools/build/lib/testutil:TestConstants",
         "//src/test/java/com/google/devtools/build/skyframe:testutil",
+        "//third_party:error_prone_annotations",
         "//third_party:guava",
         "//third_party:guava-testlib",
         "//third_party:jsr305",
@@ -356,6 +364,29 @@ java_test(
 )
 
 java_test(
+    name = "RunfilesRepoMappingManifestTest",
+    srcs = ["RunfilesRepoMappingManifestTest.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/analysis:blaze_directories",
+        "//src/main/java/com/google/devtools/build/lib/analysis:repo_mapping_manifest_action",
+        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:resolution",
+        "//src/main/java/com/google/devtools/build/lib/bazel/bzlmod:resolution_impl",
+        "//src/main/java/com/google/devtools/build/lib/bazel/repository:repository_options",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:precomputed_value",
+        "//src/main/java/com/google/devtools/build/lib/skyframe:sky_functions",
+        "//src/main/java/com/google/devtools/build/lib/vfs",
+        "//src/main/java/com/google/devtools/build/skyframe",
+        "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
+        "//src/test/java/com/google/devtools/build/lib/analysis/util",
+        "//src/test/java/com/google/devtools/build/lib/bazel/bzlmod:util",
+        "//third_party:guava",
+        "//third_party:junit4",
+        "//third_party:truth",
+    ],
+)
+
+java_test(
     name = "TransitiveValidationPropagationTest",
     srcs = ["TransitiveValidationPropagationTest.java"],
     deps = [
@@ -403,6 +434,16 @@ java_test(
     deps = [
         ":AbstractRunfilesSupportTest",
         "//third_party:junit4",
+    ],
+)
+
+java_test(
+    name = "config/FeatureSetTest",
+    srcs = ["config/FeatureSetTest.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/analysis:config/feature_set",
+        "//third_party:junit4",
+        "//third_party:truth",
     ],
 )
 

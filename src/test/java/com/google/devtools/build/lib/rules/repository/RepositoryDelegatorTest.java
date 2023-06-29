@@ -30,13 +30,15 @@ import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
+import com.google.devtools.build.lib.bazel.bzlmod.BazelDepGraphFunction;
+import com.google.devtools.build.lib.bazel.bzlmod.BazelLockFileFunction;
 import com.google.devtools.build.lib.bazel.bzlmod.BazelModuleResolutionFunction;
-import com.google.devtools.build.lib.bazel.bzlmod.BzlmodRepoRuleHelperImpl;
 import com.google.devtools.build.lib.bazel.bzlmod.BzlmodRepoRuleValue;
 import com.google.devtools.build.lib.bazel.bzlmod.FakeRegistry;
 import com.google.devtools.build.lib.bazel.bzlmod.ModuleFileFunction;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.BazelCompatibilityMode;
 import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.CheckDirectDepsMode;
+import com.google.devtools.build.lib.bazel.repository.RepositoryOptions.LockfileMode;
 import com.google.devtools.build.lib.bazel.repository.downloader.DownloadManager;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkRepositoryFunction;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkRepositoryModule;
@@ -68,7 +70,9 @@ import com.google.devtools.build.lib.skyframe.PackageLookupFunction;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction.CrossRepositoryLabelViolationStrategy;
 import com.google.devtools.build.lib.skyframe.PrecomputedFunction;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
+import com.google.devtools.build.lib.skyframe.RepositoryMappingFunction;
 import com.google.devtools.build.lib.skyframe.SkyFunctions;
+import com.google.devtools.build.lib.skyframe.StarlarkBuiltinsFunction;
 import com.google.devtools.build.lib.skyframe.WorkspaceFileFunction;
 import com.google.devtools.build.lib.starlarkbuildapi.repository.RepositoryBootstrap;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
@@ -114,7 +118,9 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
   public void setupDelegator() throws Exception {
     rootPath = scratch.dir("/outputbase");
     scratch.file(
-        rootPath.getRelative("MODULE.bazel").getPathString(), "module(name='test',version='0.1')");
+        rootPath.getRelative("MODULE.bazel").getPathString(),
+        "module(name='test',version='0.1')",
+        "bazel_dep(name='bazel_tools',version='1.0')");
     BlazeDirectories directories =
         new BlazeDirectories(
             new ServerDirectories(rootPath, rootPath, rootPath),
@@ -159,6 +165,13 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
             .build(ruleClassProvider, fileSystem);
 
     registryFactory = new FakeRegistry.Factory();
+    FakeRegistry registry =
+        registryFactory
+            .newFakeRegistry(scratch.dir("modules").getPathString())
+            .addModule(
+                createModuleKey("bazel_tools", "1.0"),
+                "module(name='bazel_tools', version='1.0');");
+    ModuleFileFunction.REGISTRIES.set(differencer, ImmutableList.of(registry.getUrl()));
 
     HashFunction hashFunction = fileSystem.getDigestFunction().getHashFunction();
     evaluator =
@@ -181,7 +194,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
                         null,
                         null,
                         null,
-                        /*packageProgress=*/ null,
+                        /* packageProgress= */ null,
                         PackageFunction.ActionOnIOExceptionReadingBuildFile.UseOriginalIOException
                             .INSTANCE,
                         GlobbingStrategy.SKYFRAME_HYBRID,
@@ -199,7 +212,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
                         ruleClassProvider,
                         pkgFactory,
                         directories,
-                        /*bzlLoadFunctionForInlining=*/ null))
+                        /* bzlLoadFunctionForInlining= */ null))
                 .put(
                     SkyFunctions.LOCAL_REPOSITORY_LOOKUP,
                     new LocalRepositoryLookupFunction(
@@ -214,20 +227,22 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
                     SkyFunctions.BZL_LOAD,
                     BzlLoadFunction.create(
                         pkgFactory, directories, hashFunction, Caffeine.newBuilder().build()))
+                .put(SkyFunctions.STARLARK_BUILTINS, new StarlarkBuiltinsFunction(pkgFactory))
                 .put(SkyFunctions.CONTAINING_PACKAGE_LOOKUP, new ContainingPackageLookupFunction())
                 .put(
                     SkyFunctions.IGNORED_PACKAGE_PREFIXES,
                     new IgnoredPackagePrefixesFunction(
-                        /*ignoredPackagePrefixesFile=*/ PathFragment.EMPTY_FRAGMENT))
+                        /* ignoredPackagePrefixesFile= */ PathFragment.EMPTY_FRAGMENT))
                 .put(SkyFunctions.RESOLVED_HASH_VALUES, new ResolvedHashesFunction())
+                .put(SkyFunctions.REPOSITORY_MAPPING, new RepositoryMappingFunction())
                 .put(
                     SkyFunctions.MODULE_FILE,
                     new ModuleFileFunction(registryFactory, rootPath, ImmutableMap.of()))
+                .put(SkyFunctions.BAZEL_DEP_GRAPH, new BazelDepGraphFunction(rootDirectory))
                 .put(SkyFunctions.BAZEL_MODULE_RESOLUTION, new BazelModuleResolutionFunction())
                 .put(
                     BzlmodRepoRuleValue.BZLMOD_REPO_RULE,
-                    new BzlmodRepoRuleFunction(
-                        ruleClassProvider, directories, new BzlmodRepoRuleHelperImpl()))
+                    new BzlmodRepoRuleFunction(ruleClassProvider, directories))
                 .put(
                     SkyFunctions.CLIENT_ENVIRONMENT_VARIABLE,
                     new ClientEnvironmentFunction(new AtomicReference<>(ImmutableMap.of())))
@@ -255,6 +270,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
         differencer, CheckDirectDepsMode.WARNING);
     BazelModuleResolutionFunction.BAZEL_COMPATIBILITY_MODE.set(
         differencer, BazelCompatibilityMode.ERROR);
+    BazelLockFileFunction.LOCKFILE_MODE.set(differencer, LockfileMode.OFF);
   }
 
   @Test
@@ -268,7 +284,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     EvaluationContext evaluationContext =
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
-            .setNumThreads(8)
+            .setParallelism(8)
             .setEventHandler(eventHandler)
             .build();
     EvaluationResult<SkyValue> result =
@@ -341,7 +357,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     EvaluationContext evaluationContext =
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
-            .setNumThreads(8)
+            .setParallelism(8)
             .setEventHandler(eventHandler)
             .build();
     EvaluationResult<SkyValue> result =
@@ -366,7 +382,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     EvaluationContext evaluationContext =
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
-            .setNumThreads(8)
+            .setParallelism(8)
             .setEventHandler(eventHandler)
             .build();
     EvaluationResult<SkyValue> result =
@@ -383,14 +399,6 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
         rootPath.getRelative("MODULE.bazel").getPathString(),
         "module(name='aaa',version='0.1')",
         "bazel_dep(name='bazel_tools',version='1.0')");
-    FakeRegistry registry =
-        registryFactory
-            .newFakeRegistry(scratch.dir("modules").getPathString())
-            .addModule(
-                createModuleKey("bazel_tools", "1.0"),
-                "module(name='bazel_tools', version='1.0');");
-    ModuleFileFunction.REGISTRIES.set(differencer, ImmutableList.of(registry.getUrl()));
-    // Note that bazel_tools is a well-known module, so its repo name will always be "bazel_tools".
     scratch.file(rootPath.getRelative("BUILD").getPathString());
     scratch.file(
         rootPath.getRelative("repo_rule.bzl").getPathString(),
@@ -413,7 +421,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     EvaluationContext evaluationContext =
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
-            .setNumThreads(8)
+            .setParallelism(8)
             .setEventHandler(eventHandler)
             .build();
     EvaluationResult<SkyValue> result =
@@ -442,7 +450,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     EvaluationContext evaluationContext =
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
-            .setNumThreads(8)
+            .setParallelism(8)
             .setEventHandler(eventHandler)
             .build();
     EvaluationResult<SkyValue> result =
@@ -452,7 +460,30 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     RepositoryDirectoryValue repositoryDirectoryValue = (RepositoryDirectoryValue) result.get(key);
     assertThat(repositoryDirectoryValue.repositoryExists()).isFalse();
     assertThat(repositoryDirectoryValue.getErrorMsg())
-        .contains("Repository '@foo' is not visible from repository '@fake_owner_repo'");
+        .contains("No repository visible as '@foo' from repository '@fake_owner_repo'");
+  }
+
+  @Test
+  public void loadInvisibleRepositoryFromMain() throws Exception {
+
+    StoredEventHandler eventHandler = new StoredEventHandler();
+    SkyKey key =
+        RepositoryDirectoryValue.key(
+            RepositoryName.createUnvalidated("foo").toNonVisible(RepositoryName.MAIN));
+    EvaluationContext evaluationContext =
+        EvaluationContext.newBuilder()
+            .setKeepGoing(false)
+            .setParallelism(8)
+            .setEventHandler(eventHandler)
+            .build();
+    EvaluationResult<SkyValue> result =
+        evaluator.evaluate(ImmutableList.of(key), evaluationContext);
+
+    assertThat(result.hasError()).isFalse();
+    RepositoryDirectoryValue repositoryDirectoryValue = (RepositoryDirectoryValue) result.get(key);
+    assertThat(repositoryDirectoryValue.repositoryExists()).isFalse();
+    assertThat(repositoryDirectoryValue.getErrorMsg())
+        .contains("No repository visible as '@foo' from main repository");
   }
 
   private void loadRepo(String strippedRepoName) throws InterruptedException {
@@ -463,7 +494,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
     EvaluationContext evaluationContext =
         EvaluationContext.newBuilder()
             .setKeepGoing(false)
-            .setNumThreads(8)
+            .setParallelism(8)
             .setEventHandler(eventHandler)
             .build();
     EvaluationResult<SkyValue> result =

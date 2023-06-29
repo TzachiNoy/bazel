@@ -63,9 +63,9 @@ def android_lint_action(ctx, source_files, source_jars, compilation_info):
     args = ctx.actions.args()
 
     executable = linter.tool.executable
-    transitive_inputs = [linter.data]
+    transitive_inputs = []
     if executable.extension != "jar":
-        tools = [linter.tool]
+        tools = [linter.tool, linter.data]
         args_list = [args]
     else:
         jvm_args = ctx.actions.args()
@@ -73,7 +73,7 @@ def android_lint_action(ctx, source_files, source_jars, compilation_info):
         jvm_args.add_all(linter.jvm_opts)
         jvm_args.add("-jar", executable)
         executable = java_runtime.java_executable_exec_path
-        tools = [java_runtime.files, linter.tool]
+        tools = [java_runtime.files, linter.tool.executable, linter.data]
         args_list = [jvm_args, args]
 
     classpath = compilation_info.compilation_classpath
@@ -93,7 +93,7 @@ def android_lint_action(ctx, source_files, source_jars, compilation_info):
     args.add_all("--source_jars", source_jars)
     args.add_all("--bootclasspath", bootclasspath)
     args.add_all("--classpath", classpath)
-    args.add_all("--plugins", compilation_info.plugins.processor_jars)
+    args.add_all("--lint_rules", compilation_info.plugins.processor_jars)
     args.add("--target_label", ctx.label)
 
     javac_opts = compilation_info.javac_options
@@ -127,5 +127,10 @@ def android_lint_action(ctx, source_files, source_jars, compilation_info):
         tools = tools,
         arguments = args_list,
         execution_requirements = {"supports-workers": "1"},
+        toolchain = semantics.JAVA_TOOLCHAIN_TYPE,
+        env = {
+            # TODO(b/279025786): replace with setting -XskipJarVerification in AndroidLintRunner
+            "ANDROID_LINT_SKIP_BYTECODE_VERIFIER": "true",
+        },
     )
     return android_lint_out

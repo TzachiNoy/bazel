@@ -110,6 +110,18 @@ public final class TreeArtifactValueTest {
   }
 
   @Test
+  public void createsCorrectValueWithmaterializationExecPath() {
+    PathFragment targetPath = PathFragment.create("some/target/path");
+    SpecialArtifact parent = createTreeArtifact("bin/tree");
+
+    TreeArtifactValue tree =
+        TreeArtifactValue.newBuilder(parent).setMaterializationExecPath(targetPath).build();
+
+    assertThat(tree.getMaterializationExecPath()).hasValue(targetPath);
+    assertThat(tree.getMetadata().getMaterializationExecPath()).hasValue(targetPath);
+  }
+
+  @Test
   public void empty() {
     TreeArtifactValue emptyTree = TreeArtifactValue.empty();
 
@@ -361,7 +373,13 @@ public final class TreeArtifactValueTest {
     scratch.resolve("tree/a/b/dangling_link").createSymbolicLink(PathFragment.create("?"));
     List<Pair<PathFragment, Dirent.Type>> children = new ArrayList<>();
 
-    TreeArtifactValue.visitTree(treeDir, (child, type) -> children.add(Pair.of(child, type)));
+    TreeArtifactValue.visitTree(
+        treeDir,
+        (child, type) -> {
+          synchronized (children) {
+            children.add(Pair.of(child, type));
+          }
+        });
 
     assertThat(children)
         .containsExactly(
@@ -423,7 +441,13 @@ public final class TreeArtifactValueTest {
     scratch.resolve("tree/a/up_link").createSymbolicLink(PathFragment.create("../file"));
     List<Pair<PathFragment, Dirent.Type>> children = new ArrayList<>();
 
-    TreeArtifactValue.visitTree(treeDir, (child, type) -> children.add(Pair.of(child, type)));
+    TreeArtifactValue.visitTree(
+        treeDir,
+        (child, type) -> {
+          synchronized (children) {
+            children.add(Pair.of(child, type));
+          }
+        });
 
     assertThat(children)
         .containsExactly(
@@ -438,7 +462,13 @@ public final class TreeArtifactValueTest {
     scratch.resolve("tree/absolute_link").createSymbolicLink(PathFragment.create("/tmp"));
     List<Pair<PathFragment, Dirent.Type>> children = new ArrayList<>();
 
-    TreeArtifactValue.visitTree(treeDir, (child, type) -> children.add(Pair.of(child, type)));
+    TreeArtifactValue.visitTree(
+        treeDir,
+        (child, type) -> {
+          synchronized (children) {
+            children.add(Pair.of(child, type));
+          }
+        });
 
     assertThat(children)
         .containsExactly(Pair.of(PathFragment.create("absolute_link"), Dirent.Type.SYMLINK));
@@ -699,7 +729,8 @@ public final class TreeArtifactValueTest {
   }
 
   private static FileArtifactValue metadataWithId(int id) {
-    return RemoteFileArtifactValue.create(new byte[] {(byte) id}, id, id);
+    return RemoteFileArtifactValue.create(
+        new byte[] {(byte) id}, id, id, /* expireAtEpochMilli= */ -1);
   }
 
   private static FileArtifactValue metadataWithIdNoDigest(int id) {

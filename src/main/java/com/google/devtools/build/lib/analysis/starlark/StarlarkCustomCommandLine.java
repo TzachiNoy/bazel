@@ -30,8 +30,7 @@ import com.google.devtools.build.lib.actions.CommandLineItem;
 import com.google.devtools.build.lib.actions.FilesetManifest;
 import com.google.devtools.build.lib.actions.FilesetManifest.RelativeSymlinkBehaviorWithoutError;
 import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
-import com.google.devtools.build.lib.actions.PathStripper;
-import com.google.devtools.build.lib.actions.PathStripper.CommandAdjuster;
+import com.google.devtools.build.lib.actions.PathStripper.PathMapper;
 import com.google.devtools.build.lib.actions.SingleStringArgFormatter;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
@@ -120,7 +119,9 @@ public class StarlarkCustomCommandLine extends CommandLine {
     }
 
     private static void push(
-        List<Object> arguments, Builder arg, StarlarkSemantics starlarkSemantics) {
+        ImmutableListBuilderWithSize<Object> arguments,
+        Builder arg,
+        StarlarkSemantics starlarkSemantics) {
       int features = 0;
       features |= arg.mapEach != null ? HAS_MAP_EACH : 0;
       features |= arg.nestedSet != null ? IS_NESTED_SET : 0;
@@ -181,7 +182,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
         int argi,
         List<String> builder,
         @Nullable ArtifactExpander artifactExpander,
-        PathStripper.CommandAdjuster pathStripper)
+        PathMapper pathMapper)
         throws CommandLineExpansionException, InterruptedException {
       final Location location =
           ((features & HAS_LOCATION) != 0) ? (Location) arguments.get(argi++) : null;
@@ -214,7 +215,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
         int count = expandedValues.size();
         stringValues = new ArrayList<>(expandedValues.size());
         for (int i = 0; i < count; ++i) {
-          stringValues.add(expandToCommandLine(expandedValues.get(i), pathStripper));
+          stringValues.add(expandToCommandLine(expandedValues.get(i), pathMapper));
         }
       }
       // It's safe to uniquify at this stage, any transformations after this
@@ -590,7 +591,7 @@ public class StarlarkCustomCommandLine extends CommandLine {
       return interner.intern(new ScalarArg(hasFormat));
     }
 
-    private static void push(List<Object> arguments, Builder arg) {
+    private static void push(ImmutableListBuilderWithSize<Object> arguments, Builder arg) {
       ScalarArg scalarArg = ScalarArg.create(arg.format != null);
       arguments.add(scalarArg);
       arguments.add(arg.object);
@@ -656,11 +657,33 @@ public class StarlarkCustomCommandLine extends CommandLine {
     }
   }
 
+  /** A variant of {@link ImmutableList.Builder} that keeps track of the current size. */
+  private static class ImmutableListBuilderWithSize<T> {
+    final ImmutableList.Builder<T> builder = ImmutableList.builder();
+    int size = 0;
+
+    @CanIgnoreReturnValue
+    ImmutableListBuilderWithSize<T> add(T element) {
+      builder.add(element);
+      size++;
+      return this;
+    }
+
+    ImmutableList<T> build() {
+      return builder.build();
+    }
+
+    int size() {
+      return size;
+    }
+  }
+
   static class Builder {
     private final StarlarkSemantics starlarkSemantics;
-    private final List<Object> arguments = new ArrayList<>();
+    private final ImmutableListBuilderWithSize<Object> arguments =
+        new ImmutableListBuilderWithSize<>();
     // Indexes in arguments list where individual args begin
-    private final List<Integer> argStartIndexes = new ArrayList<>();
+    private final ImmutableList.Builder<Integer> argStartIndexes = ImmutableList.builder();
 
     public Builder(StarlarkSemantics starlarkSemantics) {
       this.starlarkSemantics = starlarkSemantics;
@@ -692,10 +715,9 @@ public class StarlarkCustomCommandLine extends CommandLine {
 
     StarlarkCustomCommandLine build(boolean flagPerLine) {
       if (flagPerLine) {
-        return new StarlarkCustomCommandLineWithIndexes(
-            ImmutableList.copyOf(arguments), ImmutableList.copyOf(argStartIndexes));
+        return new StarlarkCustomCommandLineWithIndexes(arguments.build(), argStartIndexes.build());
       } else {
-        return new StarlarkCustomCommandLine(ImmutableList.copyOf(arguments));
+        return new StarlarkCustomCommandLine(arguments.build());
       }
     }
   }
@@ -712,12 +734,12 @@ public class StarlarkCustomCommandLine extends CommandLine {
   @Override
   public Iterable<String> arguments(@Nullable ArtifactExpander artifactExpander)
       throws CommandLineExpansionException, InterruptedException {
-    return arguments(artifactExpander, PathStripper.CommandAdjuster.NOOP);
+    return arguments(artifactExpander, PathMapper.NOOP);
   }
 
   @Override
   public Iterable<String> arguments(
-      @Nullable ArtifactExpander artifactExpander, CommandAdjuster stripPaths)
+      @Nullable ArtifactExpander artifactExpander, PathMapper stripPaths)
       throws CommandLineExpansionException, InterruptedException {
     List<String> result = new ArrayList<>();
 
@@ -732,15 +754,15 @@ public class StarlarkCustomCommandLine extends CommandLine {
         result.add(expandToCommandLine(arg, stripPaths));
       }
     }
-    return ImmutableList.copyOf(stripPaths.stripCustomStarlarkArgs(result));
+    return ImmutableList.copyOf(stripPaths.mapCustomStarlarkArgs(result));
   }
 
-  private static String expandToCommandLine(Object object, CommandAdjuster pathStripper) {
+  private static String expandToCommandLine(Object object, PathMapper pathMapper) {
     // It'd be nice to build this into DerivedArtifact's CommandLine interface so we don't have
     // to explicitly check if an object is a DerivedArtifact. Unfortunately that would require
     // a lot more dependencies on the Java library DerivedArtifact is built into.
     return object instanceof DerivedArtifact
-        ? pathStripper.strip(((DerivedArtifact) object).getExecPath()).getPathString()
+        ? pathMapper.map(((DerivedArtifact) object).getExecPath()).getPathString()
         : CommandLineItem.expandToCommandLine(object);
   }
 
@@ -762,12 +784,12 @@ public class StarlarkCustomCommandLine extends CommandLine {
     @Override
     public Iterable<String> arguments(@Nullable ArtifactExpander artifactExpander)
         throws CommandLineExpansionException, InterruptedException {
-      return arguments(artifactExpander, CommandAdjuster.NOOP);
+      return arguments(artifactExpander, PathMapper.NOOP);
     }
 
     @Override
     public Iterable<String> arguments(
-        @Nullable ArtifactExpander artifactExpander, CommandAdjuster stripPaths)
+        @Nullable ArtifactExpander artifactExpander, PathMapper stripPaths)
         throws CommandLineExpansionException, InterruptedException {
 
       List<String> result = new ArrayList<>();

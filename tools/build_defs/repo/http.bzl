@@ -110,6 +110,8 @@ def _get_auth(ctx, urls):
     """Given the list of URLs obtain the correct auth dict."""
     if ctx.attr.netrc:
         netrc = read_netrc(ctx, ctx.attr.netrc)
+    elif "NETRC" in ctx.os.environ:
+        netrc = read_netrc(ctx, ctx.os.environ["NETRC"])
     else:
         netrc = read_user_netrc(ctx)
     return use_netrc(netrc, urls, ctx.attr.auth_patterns)
@@ -286,7 +288,7 @@ and `strip_prefix = "foo-1.2.3"`.""",
 By default, the archive type is determined from the file extension of the
 URL. If the file has no extension, you can explicitly specify one of the
 following: `"zip"`, `"jar"`, `"war"`, `"aar"`, `"tar"`, `"tar.gz"`, `"tgz"`,
-`"tar.xz"`, `"txz"`, `"tar.zst"`, `"tzst"`, `tar.bz2`, `"ar"`, or `"deb"`.""",
+`"tar.xz"`, `"txz"`, `"tar.zst"`, `"tzst"`, `"tar.bz2"`, `"ar"`, or `"deb"`.""",
     ),
     "patches": attr.label_list(
         default = [],

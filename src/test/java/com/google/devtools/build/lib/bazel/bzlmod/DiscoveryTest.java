@@ -29,7 +29,7 @@ import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
-import com.google.devtools.build.lib.bazel.bzlmod.BzlmodTestUtil.ModuleBuilder;
+import com.google.devtools.build.lib.bazel.bzlmod.BzlmodTestUtil.InterimModuleBuilder;
 import com.google.devtools.build.lib.bazel.bzlmod.ModuleFileValue.RootModuleFileValue;
 import com.google.devtools.build.lib.bazel.repository.starlark.StarlarkRepositoryModule;
 import com.google.devtools.build.lib.clock.BlazeClock;
@@ -91,11 +91,11 @@ public class DiscoveryTest extends FoundationTestCase {
     static final SkyFunctionName FUNCTION_NAME = SkyFunctionName.createHermetic("test_discovery");
     static final SkyKey KEY = () -> FUNCTION_NAME;
 
-    static DiscoveryValue create(ImmutableMap<ModuleKey, Module> depGraph) {
+    static DiscoveryValue create(ImmutableMap<ModuleKey, InterimModule> depGraph) {
       return new AutoValue_DiscoveryTest_DiscoveryValue(depGraph);
     }
 
-    abstract ImmutableMap<ModuleKey, Module> getDepGraph();
+    abstract ImmutableMap<ModuleKey, InterimModule> getDepGraph();
   }
 
   static class DiscoveryFunction implements SkyFunction {
@@ -107,7 +107,7 @@ public class DiscoveryTest extends FoundationTestCase {
       if (root == null) {
         return null;
       }
-      ImmutableMap<ModuleKey, Module> depGraph = Discovery.run(env, root);
+      ImmutableMap<ModuleKey, InterimModule> depGraph = Discovery.run(env, root);
       return depGraph == null ? null : DiscoveryValue.create(depGraph);
     }
   }
@@ -122,7 +122,7 @@ public class DiscoveryTest extends FoundationTestCase {
     workspaceRoot = scratch.dir("/ws");
     differencer = new SequencedRecordingDifferencer();
     evaluationContext =
-        EvaluationContext.newBuilder().setNumThreads(8).setEventHandler(reporter).build();
+        EvaluationContext.newBuilder().setParallelism(8).setEventHandler(reporter).build();
     registryFactory = new FakeRegistry.Factory();
     AtomicReference<PathPackageLocator> packageLocator =
         new AtomicReference<>(
@@ -177,8 +177,7 @@ public class DiscoveryTest extends FoundationTestCase {
                         BazelSkyframeExecutorConstants.EXTERNAL_PACKAGE_HELPER))
                 .put(
                     BzlmodRepoRuleValue.BZLMOD_REPO_RULE,
-                    new BzlmodRepoRuleFunction(
-                        ruleClassProvider, directories, new BzlmodRepoRuleHelperImpl()))
+                    new BzlmodRepoRuleFunction(ruleClassProvider, directories))
                 .buildOrThrow(),
             differencer);
 
@@ -227,20 +226,20 @@ public class DiscoveryTest extends FoundationTestCase {
     DiscoveryValue discoveryValue = result.get(DiscoveryValue.KEY);
     assertThat(discoveryValue.getDepGraph().entrySet())
         .containsExactly(
-            ModuleBuilder.create("aaa", "0.1")
+            InterimModuleBuilder.create("aaa", "0.1")
                 .setKey(ModuleKey.ROOT)
                 .addDep("bbb", createModuleKey("bbb", "1.0"))
                 .addDep("ccc", createModuleKey("ccc", "2.0"))
                 .buildEntry(),
-            ModuleBuilder.create("bbb", "1.0")
+            InterimModuleBuilder.create("bbb", "1.0")
                 .addDep("ddd", createModuleKey("ddd", "3.0"))
                 .setRegistry(registry)
                 .buildEntry(),
-            ModuleBuilder.create("ccc", "2.0")
+            InterimModuleBuilder.create("ccc", "2.0")
                 .addDep("ddd", createModuleKey("ddd", "3.0"))
                 .setRegistry(registry)
                 .buildEntry(),
-            ModuleBuilder.create("ddd", "3.0").setRegistry(registry).buildEntry());
+            InterimModuleBuilder.create("ddd", "3.0").setRegistry(registry).buildEntry());
   }
 
   @Test
@@ -269,13 +268,13 @@ public class DiscoveryTest extends FoundationTestCase {
     DiscoveryValue discoveryValue = result.get(DiscoveryValue.KEY);
     assertThat(discoveryValue.getDepGraph().entrySet())
         .containsExactly(
-            ModuleBuilder.create("aaa", "0.1")
+            InterimModuleBuilder.create("aaa", "0.1")
                 .setKey(ModuleKey.ROOT)
                 .addDep("bbb", createModuleKey("bbb", "1.0"))
                 .addDep("ccc", createModuleKey("ccc", "1.0"))
                 .buildEntry(),
-            ModuleBuilder.create("bbb", "1.0").setRegistry(registry).buildEntry(),
-            ModuleBuilder.create("ccc", "1.0").setRegistry(registry).buildEntry());
+            InterimModuleBuilder.create("bbb", "1.0").setRegistry(registry).buildEntry(),
+            InterimModuleBuilder.create("ccc", "1.0").setRegistry(registry).buildEntry());
   }
 
   @Test
@@ -305,11 +304,11 @@ public class DiscoveryTest extends FoundationTestCase {
     DiscoveryValue discoveryValue = result.get(DiscoveryValue.KEY);
     assertThat(discoveryValue.getDepGraph().entrySet())
         .containsExactly(
-            ModuleBuilder.create("aaa", "0.1")
+            InterimModuleBuilder.create("aaa", "0.1")
                 .setKey(ModuleKey.ROOT)
                 .addDep("bbb", createModuleKey("bbb", "1.0"))
                 .buildEntry(),
-            ModuleBuilder.create("bbb", "1.0").setRegistry(registry).buildEntry());
+            InterimModuleBuilder.create("bbb", "1.0").setRegistry(registry).buildEntry());
   }
 
   @Test
@@ -337,15 +336,15 @@ public class DiscoveryTest extends FoundationTestCase {
     DiscoveryValue discoveryValue = result.get(DiscoveryValue.KEY);
     assertThat(discoveryValue.getDepGraph().entrySet())
         .containsExactly(
-            ModuleBuilder.create("aaa", "0.1")
+            InterimModuleBuilder.create("aaa", "0.1")
                 .setKey(ModuleKey.ROOT)
                 .addDep("bbb", createModuleKey("bbb", "1.0"))
                 .buildEntry(),
-            ModuleBuilder.create("bbb", "1.0")
+            InterimModuleBuilder.create("bbb", "1.0")
                 .addDep("ccc", createModuleKey("ccc", "2.0"))
                 .setRegistry(registry)
                 .buildEntry(),
-            ModuleBuilder.create("ccc", "2.0")
+            InterimModuleBuilder.create("ccc", "2.0")
                 .addDep("bbb", createModuleKey("bbb", "1.0"))
                 .setRegistry(registry)
                 .buildEntry());
@@ -374,11 +373,11 @@ public class DiscoveryTest extends FoundationTestCase {
     DiscoveryValue discoveryValue = result.get(DiscoveryValue.KEY);
     assertThat(discoveryValue.getDepGraph().entrySet())
         .containsExactly(
-            ModuleBuilder.create("aaa", "0.1")
+            InterimModuleBuilder.create("aaa", "0.1")
                 .setKey(ModuleKey.ROOT)
                 .addDep("bbb", createModuleKey("bbb", "1.0"))
                 .buildEntry(),
-            ModuleBuilder.create("bbb", "1.0")
+            InterimModuleBuilder.create("bbb", "1.0")
                 .addDep("aaa", ModuleKey.ROOT)
                 .addOriginalDep("aaa", createModuleKey("aaa", "2.0"))
                 .setRegistry(registry)
@@ -410,16 +409,16 @@ public class DiscoveryTest extends FoundationTestCase {
     DiscoveryValue discoveryValue = result.get(DiscoveryValue.KEY);
     assertThat(discoveryValue.getDepGraph().entrySet())
         .containsExactly(
-            ModuleBuilder.create("aaa", "0.1")
+            InterimModuleBuilder.create("aaa", "0.1")
                 .setKey(ModuleKey.ROOT)
                 .addDep("bbb", createModuleKey("bbb", "0.1"))
                 .buildEntry(),
-            ModuleBuilder.create("bbb", "0.1")
+            InterimModuleBuilder.create("bbb", "0.1")
                 .addDep("ccc", createModuleKey("ccc", "2.0"))
                 .addOriginalDep("ccc", createModuleKey("ccc", "1.0"))
                 .setRegistry(registry)
                 .buildEntry(),
-            ModuleBuilder.create("ccc", "2.0").setRegistry(registry).buildEntry());
+            InterimModuleBuilder.create("ccc", "2.0").setRegistry(registry).buildEntry());
   }
 
   @Test
@@ -452,15 +451,15 @@ public class DiscoveryTest extends FoundationTestCase {
     DiscoveryValue discoveryValue = result.get(DiscoveryValue.KEY);
     assertThat(discoveryValue.getDepGraph().entrySet())
         .containsExactly(
-            ModuleBuilder.create("aaa", "0.1")
+            InterimModuleBuilder.create("aaa", "0.1")
                 .setKey(ModuleKey.ROOT)
                 .addDep("bbb", createModuleKey("bbb", "0.1"))
                 .buildEntry(),
-            ModuleBuilder.create("bbb", "0.1")
+            InterimModuleBuilder.create("bbb", "0.1")
                 .addDep("ccc", createModuleKey("ccc", "1.0"))
                 .setRegistry(registry1)
                 .buildEntry(),
-            ModuleBuilder.create("ccc", "1.0")
+            InterimModuleBuilder.create("ccc", "1.0")
                 .addDep("bbb", createModuleKey("bbb", "0.1"))
                 .setRegistry(registry2)
                 .buildEntry());
@@ -494,16 +493,18 @@ public class DiscoveryTest extends FoundationTestCase {
     DiscoveryValue discoveryValue = result.get(DiscoveryValue.KEY);
     assertThat(discoveryValue.getDepGraph().entrySet())
         .containsExactly(
-            ModuleBuilder.create("aaa", "0.1")
+            InterimModuleBuilder.create("aaa", "0.1")
                 .setKey(ModuleKey.ROOT)
                 .addDep("bbb", createModuleKey("bbb", "0.1"))
                 .buildEntry(),
-            ModuleBuilder.create("bbb", "0.1")
+            InterimModuleBuilder.create("bbb", "0.1")
                 .addDep("ccc", createModuleKey("ccc", ""))
                 .addOriginalDep("ccc", createModuleKey("ccc", "1.0"))
                 .setRegistry(registry)
                 .buildEntry(),
-            ModuleBuilder.create("ccc", "2.0").setKey(createModuleKey("ccc", "")).buildEntry());
+            InterimModuleBuilder.create("ccc", "2.0")
+                .setKey(createModuleKey("ccc", ""))
+                .buildEntry());
   }
 
   @Test
@@ -542,26 +543,26 @@ public class DiscoveryTest extends FoundationTestCase {
     DiscoveryValue discoveryValue = result.get(DiscoveryValue.KEY);
     assertThat(discoveryValue.getDepGraph().entrySet())
         .containsExactly(
-            ModuleBuilder.create("", "")
+            InterimModuleBuilder.create("", "")
                 .addDep("bazel_tools", createModuleKey("bazel_tools", ""))
                 .addDep("local_config_platform", createModuleKey("local_config_platform", ""))
                 .addDep("foo", createModuleKey("foo", "2.0"))
                 .buildEntry(),
-            ModuleBuilder.create("bazel_tools", "1.0")
+            InterimModuleBuilder.create("bazel_tools", "1.0")
                 .setKey(createModuleKey("bazel_tools", ""))
                 .addDep("local_config_platform", createModuleKey("local_config_platform", ""))
                 .addDep("foo", createModuleKey("foo", "1.0"))
                 .buildEntry(),
-            ModuleBuilder.create("local_config_platform", "")
+            InterimModuleBuilder.create("local_config_platform", "")
                 .setKey(createModuleKey("local_config_platform", ""))
                 .addDep("bazel_tools", createModuleKey("bazel_tools", ""))
                 .buildEntry(),
-            ModuleBuilder.create("foo", "1.0")
+            InterimModuleBuilder.create("foo", "1.0")
                 .addDep("bazel_tools", createModuleKey("bazel_tools", ""))
                 .addDep("local_config_platform", createModuleKey("local_config_platform", ""))
                 .setRegistry(registry)
                 .buildEntry(),
-            ModuleBuilder.create("foo", "2.0")
+            InterimModuleBuilder.create("foo", "2.0")
                 .addDep("bazel_tools", createModuleKey("bazel_tools", ""))
                 .addDep("local_config_platform", createModuleKey("local_config_platform", ""))
                 .setRegistry(registry)

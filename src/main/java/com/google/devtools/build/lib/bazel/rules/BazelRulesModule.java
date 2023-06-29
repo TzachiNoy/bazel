@@ -15,20 +15,18 @@
 package com.google.devtools.build.lib.bazel.rules;
 
 import com.google.common.collect.ImmutableList;
-import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.bazel.rules.cpp.BazelCppRuleClasses;
 import com.google.devtools.build.lib.bazel.rules.sh.BazelShRuleClasses;
+import com.google.devtools.build.lib.buildtool.BuildRequest;
+import com.google.devtools.build.lib.exec.ModuleActionContextRegistry;
 import com.google.devtools.build.lib.remote.options.RemoteOptions;
-import com.google.devtools.build.lib.rules.cpp.CcSkyframeFdoSupportFunction;
-import com.google.devtools.build.lib.rules.cpp.CcSkyframeFdoSupportValue;
 import com.google.devtools.build.lib.rules.cpp.CppOptions;
+import com.google.devtools.build.lib.rules.java.JavaCompileActionContext;
 import com.google.devtools.build.lib.rules.java.JavaOptions;
 import com.google.devtools.build.lib.runtime.BlazeModule;
-import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.Command;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
-import com.google.devtools.build.lib.runtime.WorkspaceBuilder;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.server.FailureDetails.RemoteExecution;
 import com.google.devtools.build.lib.server.FailureDetails.RemoteExecution.Code;
@@ -41,6 +39,7 @@ import com.google.devtools.common.options.OptionEffectTag;
 import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.OptionsBase;
 import java.io.IOException;
+import java.util.List;
 
 /** Module implementing the rule set of Bazel. */
 public final class BazelRulesModule extends BlazeModule {
@@ -51,6 +50,32 @@ public final class BazelRulesModule extends BlazeModule {
    */
   @SuppressWarnings("deprecation") // These fields have no JavaDoc by design
   public static class BuildGraveyardOptions extends OptionsBase {
+    @Option(
+        name = "incompatible_use_platforms_repo_for_constraints",
+        defaultValue = "true",
+        documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+        effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
+        metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+        help = "Deprecated no-op.")
+    public boolean usePlatformsRepoForConstraints;
+
+    @Option(
+        name = "experimental_replay_action_out_err",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+        metadataTags = {OptionMetadataTag.DEPRECATED, OptionMetadataTag.INCOMPATIBLE_CHANGE},
+        help = "Deprecated no-op.")
+    public boolean replayActionOutErr;
+
+    @Option(
+        name = "experimental_async_execution",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+        metadataTags = {OptionMetadataTag.DEPRECATED, OptionMetadataTag.INCOMPATIBLE_CHANGE},
+        help = "Deprecated no-op.")
+    public boolean useAsyncExecution;
 
     @Option(
         name = "incompatible_disable_crosstool_file",
@@ -125,15 +150,6 @@ public final class BazelRulesModule extends BlazeModule {
         metadataTags = {OptionMetadataTag.DEPRECATED, OptionMetadataTag.INCOMPATIBLE_CHANGE},
         help = "Deprecated no-op.")
     public boolean incompatibleDisableInMemoryToolsDefaultsPackage;
-
-    @Option(
-        name = "output_symbol_counts",
-        defaultValue = "false",
-        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-        effectTags = {OptionEffectTag.ACTION_COMMAND_LINES, OptionEffectTag.AFFECTS_OUTPUTS},
-        metadataTags = {OptionMetadataTag.HIDDEN, OptionMetadataTag.DEPRECATED},
-        help = "Deprecated no-op.")
-    public boolean symbolCounts;
 
     @Option(
         name = "incompatible_disable_sysroot_from_configuration",
@@ -270,6 +286,40 @@ public final class BazelRulesModule extends BlazeModule {
         help = "Deprecated no-op. Use --experimental_dynamic_local_load_factor instead.")
     @Deprecated
     public boolean skipFirstBuild;
+
+    @Option(
+        name = "experimental_parse_headers_skipped_if_corresponding_srcs_found",
+        defaultValue = "false",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.NO_OP},
+        help = "No-op.")
+    public boolean parseHeadersSkippedIfCorrespondingSrcsFound;
+
+    @Option(
+        name = "experimental_worker_as_resource",
+        defaultValue = "true",
+        documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+        effectTags = {OptionEffectTag.NO_OP},
+        help = "No-op, will be removed soon.")
+    public boolean workerAsResource;
+
+    @Option(
+        name = "high_priority_workers",
+        defaultValue = "null",
+        documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+        effectTags = {OptionEffectTag.EXECUTION},
+        help = "No-op, will be removed soon.",
+        allowMultiple = true)
+    public List<String> highPriorityWorkers;
+
+    @Option(
+        name = "use_workers_with_dexbuilder",
+        defaultValue = "true",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.EXECUTION},
+        help = "This option is deprecated and has no effect.")
+    @Deprecated
+    public boolean useWorkersWithDexbuilder;
   }
 
   /** This is where deprecated Bazel-specific options only used by the build command go to die. */
@@ -430,15 +480,6 @@ public final class BazelRulesModule extends BlazeModule {
     public boolean besBestEffort;
 
     @Option(
-        name = "distinct_host_configuration",
-        defaultValue = "false",
-        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-        effectTags = {OptionEffectTag.NO_OP},
-        metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-        help = "No-op.")
-    public boolean useDistinctHostConfiguration;
-
-    @Option(
         name = "experimental_keep_config_nodes_on_analysis_discard",
         defaultValue = "false",
         documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
@@ -471,6 +512,15 @@ public final class BazelRulesModule extends BlazeModule {
         effectTags = {OptionEffectTag.NO_OP},
         help = "No-op")
     public boolean incompatibleDisableThirdPartyLicenseChecking;
+
+    @Option(
+        name = "experimental_use_fork_join_pool",
+        defaultValue = "true",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        metadataTags = OptionMetadataTag.DEPRECATED,
+        effectTags = {OptionEffectTag.NO_OP},
+        help = "No-op.")
+    public boolean useForkJoinPool;
   }
 
   @Override
@@ -502,17 +552,18 @@ public final class BazelRulesModule extends BlazeModule {
   }
 
   @Override
-  public void workspaceInit(
-      BlazeRuntime runtime, BlazeDirectories directories, WorkspaceBuilder builder) {
-    builder.addSkyFunction(
-        CcSkyframeFdoSupportValue.SKYFUNCTION, new CcSkyframeFdoSupportFunction(directories));
-  }
-
-  @Override
   public Iterable<Class<? extends OptionsBase>> getCommandOptions(Command command) {
     return "build".equals(command.name())
         ? ImmutableList.of(BazelBuildGraveyardOptions.class, AllCommandGraveyardOptions.class)
         : ImmutableList.of(AllCommandGraveyardOptions.class);
+  }
+
+  @Override
+  public void registerActionContexts(
+      ModuleActionContextRegistry.Builder registryBuilder,
+      CommandEnvironment env,
+      BuildRequest buildRequest) {
+    registryBuilder.register(JavaCompileActionContext.class, new JavaCompileActionContext());
   }
 
   private static void validateRemoteOutputsMode(CommandEnvironment env) throws AbruptExitException {

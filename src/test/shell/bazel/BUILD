@@ -52,6 +52,8 @@ filegroup(
         "cc_api_rules.bzl",
         "remote_helpers.sh",
         "testing_server.py",
+        ":hamcrest_jar",
+        ":junit_jar",
         "//examples:srcs",
         "//src/conditions:srcs",
         "//src/java_tools/buildjar/java/com/google/devtools/build/buildjar/genclass:GenClass_deploy.jar",
@@ -71,6 +73,20 @@ filegroup(
     visibility = [
         "//src/test/shell:__subpackages__",
     ],
+)
+
+genrule(
+    name = "junit_jar",
+    srcs = ["@maven//:junit_junit_file"],
+    outs = ["junit.jar"],
+    cmd = "cp $< $@",
+)
+
+genrule(
+    name = "hamcrest_jar",
+    srcs = ["@maven//:org_hamcrest_hamcrest_core_file"],
+    outs = ["hamcrest.jar"],
+    cmd = "cp $< $@",
 )
 
 sh_test(
@@ -188,6 +204,21 @@ sh_test(
 )
 
 sh_test(
+    name = "bazel_java_test_defaults_prebuilt",
+    srcs = ["bazel_java_test_defaults_prebuilt.sh"],
+    data = [
+        ":test-deps",
+        "@bazel_tools//tools/bash/runfiles",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": ["@platforms//cpu:x86_64"],
+        "@platforms//os:macos": [],
+        "@platforms//os:windows": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+sh_test(
     name = "bazel_java17_test",
     srcs = ["bazel_java17_test.sh"],
     args = [
@@ -294,7 +325,7 @@ sh_test(
 
 sh_test(
     name = "bazel_java_tools_test",
-    size = "medium",
+    size = "large",
     srcs = ["bazel_java_tools_test.sh"],
     data = [
         ":test-deps",
@@ -357,6 +388,7 @@ sh_test(
         "@bazel_tools//tools/bash/runfiles",
     ],
     shard_count = 3,
+    tags = ["requires-network"],
 )
 
 sh_test(
@@ -448,6 +480,7 @@ sh_test(
 
 sh_test(
     name = "bazel_coverage_java_test",
+    size = "large",
     srcs = ["bazel_coverage_java_test.sh"],
     args = [
         "released",
@@ -597,6 +630,25 @@ sh_test(
 )
 
 sh_test(
+    name = "bazel_package_loader_test",
+    srcs = ["bazel_package_loader_test.sh"],
+    data = [
+        ":test-deps",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/packages/testing:BazelPackageLoaderTester",
+    ],
+    tags = ["no_windows"],
+)
+
+sh_test(
+    name = "bazel_permissions_test",
+    size = "small",
+    srcs = ["bazel_permissions_test.sh"],
+    data = [":test-deps"],
+    tags = ["no_windows"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
     name = "bazel_execute_testlog",
     srcs = ["bazel_execute_testlog.sh"],
     data = [":test-deps"],
@@ -716,17 +768,6 @@ sh_test(
 )
 
 sh_test(
-    name = "git_repository_test",
-    size = "large",
-    srcs = ["git_repository_test.sh"],
-    data = [
-        ":test-deps",
-        "//src/test/shell/bazel/testdata:git-repos",
-        "@bazel_tools//tools/bash/runfiles",
-    ],
-)
-
-sh_test(
     name = "starlark_git_repository_test",
     size = "large",
     srcs = ["starlark_git_repository_test.sh"],
@@ -832,7 +873,10 @@ sh_test(
     size = "medium",
     srcs = ["runfiles_test.sh"],
     data = [":test-deps"],
-    tags = ["no_windows"],
+    tags = [
+        "no_windows",
+        "requires-network",
+    ],
 )
 
 sh_test(
@@ -917,10 +961,10 @@ sh_test(
 
 sh_test(
     name = "cc_integration_test",
-    size = "medium",
+    size = "large",
     srcs = ["cc_integration_test.sh"],
     data = [":test-deps"],
-    shard_count = 5,
+    shard_count = 10,
     tags = ["no_windows"],
 )
 
@@ -953,6 +997,20 @@ sh_test(
     name = "bazel_sandboxing_test",
     size = "large",
     srcs = ["bazel_sandboxing_test.sh"],
+    data = [
+        ":test-deps",
+        "//src/test/shell:sandboxing_test_utils.sh",
+    ],
+    tags = [
+        "no-sandbox",
+        "no_windows",
+    ],
+)
+
+sh_test(
+    name = "bazel_sandboxing_networking_test",
+    size = "large",
+    srcs = ["bazel_sandboxing_networking_test.sh"],
     data = [
         ":test-deps",
         "//src/test/shell:sandboxing_test_utils.sh",
@@ -1013,7 +1071,10 @@ sh_test(
     size = "medium",
     srcs = ["execroot_test.sh"],
     data = [":test-deps"],
-    tags = ["no_windows"],
+    tags = [
+        "no_windows",
+        "requires-network",
+    ],
 )
 
 sh_test(
@@ -1056,12 +1117,12 @@ sh_test(
     srcs = ["bazel_bootstrap_distfile_test.sh"],
     args = [
         "$(location //:bazel-distfile)",
-        "$(location //src:embedded_jdk_allmodules_cached)",
+        "$(location //src:embedded_jdk_allmodules)",
     ],
     data = [
         ":test-deps",
         "//:bazel-distfile",
-        "//src:embedded_jdk_allmodules_cached",
+        "//src:embedded_jdk_allmodules",
         "@bazel_tools//tools/bash/runfiles",
     ],
     exec_compatible_with = ["//:highcpu_machine"],
@@ -1074,12 +1135,12 @@ sh_test(
     srcs = ["bazel_bootstrap_distfile_test.sh"],
     args = [
         "$(location //:bazel-distfile-tar)",
-        "$(location //src:embedded_jdk_allmodules_cached)",
+        "$(location //src:embedded_jdk_allmodules)",
     ],
     data = [
         ":test-deps",
         "//:bazel-distfile-tar",
-        "//src:embedded_jdk_allmodules_cached",
+        "//src:embedded_jdk_allmodules",
         "@bazel_tools//tools/bash/runfiles",
     ],
     exec_compatible_with = ["//:highcpu_machine"],

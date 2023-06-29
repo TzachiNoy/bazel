@@ -3,6 +3,8 @@ Book: /_book.yaml
 
 # Getting Help
 
+{% include "_buttons.html" %}
+
 This page lists Bazel resources beyond the documentation and covers how to get
 support from the Bazel team and community.
 
@@ -11,7 +13,7 @@ support from the Bazel team and community.
 In addition to the documentation, you can find helpful information by searching:
 
 * [Bazel user group](https://groups.google.com/g/bazel-discuss){: .external}
-* [Bazel developer group](https://groups.google.com/g/bazel-dev){: .external}
+* [Bazel GitHub Discussions](https://github.com/bazelbuild/bazel/discussions){: .external}
 * [Bazel blog](https://blog.bazel.build/)
 * [Stack Overflow](https://stackoverflow.com/questions/tagged/bazel){: .external}
 * [`awesome-bazel` resources](https://github.com/jin/awesome-bazel){: .external}
@@ -36,7 +38,7 @@ There are recordings of Bazel talks at various conferences, such as:
 If there are no existing answers, you can ask the community by:
 
 * Emailing the [Bazel user group](https://groups.google.com/g/bazel-discuss){: .external}
-* Emailing the [Bazel developer group](https://groups.google.com/g/bazel-dev){: .external}
+* Starting a discussion on [GitHub](https://github.com/bazelbuild/bazel/discussions){: .external}
 * Asking a question on [Stack Overflow](https://stackoverflow.com/questions/tagged/bazel){: .external}
 * Chatting with other Bazel contributors on [Slack](https://slack.bazel.build/)
 * Consulting a [Bazel community expert](/community/experts)

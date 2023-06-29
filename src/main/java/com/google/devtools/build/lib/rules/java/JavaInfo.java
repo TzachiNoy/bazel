@@ -136,11 +136,13 @@ public final class JavaInfo extends NativeInfo
 
     NestedSetBuilder<Artifact> runtimeJars = NestedSetBuilder.stableOrder();
     NestedSetBuilder<String> javaConstraints = NestedSetBuilder.stableOrder();
+    boolean neverlink = false;
     for (JavaInfo javaInfo : providers) {
       if (mergeJavaOutputs) {
         runtimeJars.addAll(javaInfo.getDirectRuntimeJars());
       }
       javaConstraints.addAll(javaInfo.getJavaConstraints());
+      neverlink = neverlink || javaInfo.neverlink;
     }
 
     ImmutableList<JavaModuleFlagsProvider> javaModuleFlagsProviderProviders =
@@ -162,6 +164,7 @@ public final class JavaInfo extends NativeInfo
             // TODO(iirina): merge or remove JavaCompilationInfoProvider
             .setRuntimeJars(runtimeJars.build().toList())
             .setJavaConstraints(javaConstraints.build().toList())
+            .setNeverlink(neverlink)
             .addProvider(
                 JavaModuleFlagsProvider.class,
                 JavaModuleFlagsProvider.merge(javaModuleFlagsProviderProviders));
@@ -288,7 +291,7 @@ public final class JavaInfo extends NativeInfo
         getProviderAsNestedSet(
             JavaCompilationArgsProvider.class,
             JavaCompilationArgsProvider::getDirectCompileTimeJars);
-    return Depset.of(Artifact.TYPE, compileTimeJars);
+    return Depset.of(Artifact.class, compileTimeJars);
   }
 
   @Override
@@ -297,7 +300,7 @@ public final class JavaInfo extends NativeInfo
         getProviderAsNestedSet(
             JavaCompilationArgsProvider.class,
             JavaCompilationArgsProvider::getDirectFullCompileTimeJars);
-    return Depset.of(Artifact.TYPE, fullCompileTimeJars);
+    return Depset.of(Artifact.class, fullCompileTimeJars);
   }
 
   @Override
@@ -343,7 +346,7 @@ public final class JavaInfo extends NativeInfo
   @Override
   public Depset /*<Artifact>*/ getTransitiveDeps() {
     return Depset.of(
-        Artifact.TYPE,
+        Artifact.class,
         getProviderAsNestedSet(
             JavaCompilationArgsProvider.class,
             JavaCompilationArgsProvider::getTransitiveCompileTimeJars));
@@ -352,7 +355,7 @@ public final class JavaInfo extends NativeInfo
   @Override
   public Depset /*<Artifact>*/ getTransitiveRuntimeDeps() {
     return Depset.of(
-        Artifact.TYPE,
+        Artifact.class,
         getProviderAsNestedSet(
             JavaCompilationArgsProvider.class, JavaCompilationArgsProvider::getRuntimeJars));
   }
@@ -360,7 +363,7 @@ public final class JavaInfo extends NativeInfo
   @Override
   public Depset /*<Artifact>*/ getTransitiveSourceJars() {
     return Depset.of(
-        Artifact.TYPE,
+        Artifact.class,
         getProviderAsNestedSet(
             JavaSourceJarsProvider.class, JavaSourceJarsProvider::getTransitiveSourceJars));
   }
@@ -374,7 +377,7 @@ public final class JavaInfo extends NativeInfo
 
   @Override
   public Depset /*<LibraryToLink>*/ getTransitiveNativeLibrariesForStarlark() {
-    return Depset.of(LibraryToLink.TYPE, getTransitiveNativeLibraries());
+    return Depset.of(LibraryToLink.class, getTransitiveNativeLibraries());
   }
 
   @Override

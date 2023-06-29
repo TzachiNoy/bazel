@@ -30,6 +30,7 @@ import com.google.devtools.build.lib.rules.cpp.CcImportRule;
 import com.google.devtools.build.lib.rules.cpp.CcInfo;
 import com.google.devtools.build.lib.rules.cpp.CcLibcTopAlias;
 import com.google.devtools.build.lib.rules.cpp.CcNativeLibraryInfo;
+import com.google.devtools.build.lib.rules.cpp.CcSharedLibraryRule;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainAliasRule;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainConfigInfo;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainRule;
@@ -41,7 +42,6 @@ import com.google.devtools.build.lib.rules.cpp.CppRuleClasses.CcLinkingRule;
 import com.google.devtools.build.lib.rules.cpp.DebugPackageProvider;
 import com.google.devtools.build.lib.rules.cpp.FdoPrefetchHintsRule;
 import com.google.devtools.build.lib.rules.cpp.FdoProfileRule;
-import com.google.devtools.build.lib.rules.cpp.GoogleLegacyStubs;
 import com.google.devtools.build.lib.rules.cpp.GraphNodeAspect;
 import com.google.devtools.build.lib.rules.cpp.PropellerOptimizeRule;
 import com.google.devtools.build.lib.rules.platform.PlatformRules;
@@ -63,8 +63,11 @@ public class CcRules implements RuleSet {
   @Override
   public void init(ConfiguredRuleClassProvider.Builder builder) {
     GraphNodeAspect graphNodeAspect = new GraphNodeAspect();
+    BazelCcModule bazelCcModule = new BazelCcModule();
     builder.addConfigurationFragment(CppConfiguration.class);
     builder.addStarlarkAccessibleTopLevels("CcSharedLibraryInfo", Starlark.NONE);
+    builder.addStarlarkAccessibleTopLevels("CcSharedLibraryHintInfo", Starlark.NONE);
+    builder.addStarlarkAccessibleTopLevels("cc_proto_aspect", Starlark.NONE);
     builder.addBuildInfoFactory(new CppBuildInfo());
 
     builder.addNativeAspectClass(graphNodeAspect);
@@ -80,6 +83,7 @@ public class CcRules implements RuleSet {
     builder.addRuleDefinition(new BazelCppRuleClasses.CcRule());
     builder.addRuleDefinition(new BazelCppRuleClasses.CcBinaryBaseRule(graphNodeAspect));
     builder.addRuleDefinition(new BazelCcBinaryRule());
+    builder.addRuleDefinition(new CcSharedLibraryRule());
     builder.addRuleDefinition(new BazelCcTestRule());
     builder.addRuleDefinition(new BazelCppRuleClasses.CcLibraryBaseRule());
     builder.addRuleDefinition(new BazelCcLibraryRule());
@@ -92,16 +96,13 @@ public class CcRules implements RuleSet {
     builder.addStarlarkBuiltinsInternal(
         "StaticallyLinkedMarkerProvider", StaticallyLinkedMarkerProvider.PROVIDER);
     builder.addStarlarkBuiltinsInternal("CcNativeLibraryInfo", CcNativeLibraryInfo.PROVIDER);
+    builder.addStarlarkBuiltinsInternal("cc_common_internal_do_not_use", bazelCcModule);
     builder.addStarlarkBootstrap(
         new CcBootstrap(
-            new BazelCcModule(),
+            bazelCcModule,
             CcInfo.PROVIDER,
             DebugPackageProvider.PROVIDER,
-            CcToolchainConfigInfo.PROVIDER,
-            new GoogleLegacyStubs.PyWrapCcHelper(),
-            new GoogleLegacyStubs.GoWrapCcHelper(),
-            new GoogleLegacyStubs.PyWrapCcInfoProvider(),
-            new GoogleLegacyStubs.PyCcLinkParamsProvider()));
+            CcToolchainConfigInfo.PROVIDER));
 
     try {
       builder.addWorkspaceFileSuffix(

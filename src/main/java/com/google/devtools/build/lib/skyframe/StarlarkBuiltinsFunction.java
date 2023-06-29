@@ -72,7 +72,7 @@ public class StarlarkBuiltinsFunction implements SkyFunction {
    * {@code @_builtins} to avoid confusion.)
    */
   static final Label EXPORTS_ENTRYPOINT =
-      Label.parseAbsoluteUnchecked("@_builtins//:exports.bzl"); // unused
+      Label.parseCanonicalUnchecked("@_builtins//:exports.bzl"); // unused
 
   /**
    * Key for loading exports.bzl. Note that {@code keyForBuiltins} (as opposed to {@code
@@ -174,12 +174,18 @@ public class StarlarkBuiltinsFunction implements SkyFunction {
               exportedToplevels,
               exportedRules,
               starlarkSemantics.get(BuildLanguageOptions.EXPERIMENTAL_BUILTINS_INJECTION_OVERRIDE));
+      ImmutableMap<String, Object> predeclaredForWorkspaceBzl =
+          starlarkEnv.createWorkspaceBzlEnvUsingInjection(
+              exportedToplevels,
+              exportedRules,
+              starlarkSemantics.get(BuildLanguageOptions.EXPERIMENTAL_BUILTINS_INJECTION_OVERRIDE));
       ImmutableMap<String, Object> predeclaredForBuild =
           starlarkEnv.createBuildEnvUsingInjection(
               exportedRules,
               starlarkSemantics.get(BuildLanguageOptions.EXPERIMENTAL_BUILTINS_INJECTION_OVERRIDE));
       return StarlarkBuiltinsValue.create(
           predeclaredForBuildBzl,
+          predeclaredForWorkspaceBzl,
           predeclaredForBuild,
           exportedToJava,
           transitiveDigest,

@@ -58,6 +58,7 @@ class TestBase(unittest.TestCase):
       'rules_cc',
       'rules_java',
       'rules_proto',
+      'rules_python',
       'remotejdk11_linux_for_testing',
       'remotejdk11_linux_aarch64_for_testing',
       'remotejdk11_linux_ppc64le_for_testing',
@@ -67,17 +68,18 @@ class TestBase(unittest.TestCase):
       'remotejdk11_win_for_testing',
       'remotejdk11_win_arm64_for_testing',
       'remotejdk17_linux_for_testing',
+      'remotejdk17_linux_s390x_for_testing',
       'remotejdk17_macos_for_testing',
       'remotejdk17_macos_aarch64_for_testing',
       'remotejdk17_win_for_testing',
       'remotejdk17_win_arm64_for_testing',
-      'remotejdk18_linux_for_testing',
-      'remotejdk18_macos_for_testing',
-      'remotejdk18_macos_aarch64_for_testing',
-      'remotejdk18_win_for_testing',
-      'remotejdk18_win_arm64_for_testing',
+      'remotejdk20_linux_for_testing',
+      'remotejdk20_macos_for_testing',
+      'remotejdk20_macos_aarch64_for_testing',
+      'remotejdk20_win_for_testing',
       'remote_java_tools_for_testing',
-      'remote_java_tools_darwin_for_testing',
+      'remote_java_tools_darwin_x86_64_for_testing',
+      'remote_java_tools_darwin_arm64_for_testing',
       'remote_java_tools_linux_for_testing',
       'remote_java_tools_windows_for_testing',
       'remote_coverage_tools',
@@ -285,6 +287,8 @@ class TestBase(unittest.TestCase):
     """
     if not path:
       return
+    if lines is not None and not isinstance(lines, list):
+      raise ValueError('expected lines to be a list, got ' + str(type(lines)))
     abspath = self.Path(path)
     if os.path.exists(abspath) and not os.path.isfile(abspath):
       raise IOError('"%s" (%s) exists and is not a file' % (path, abspath))
@@ -451,7 +455,7 @@ class TestBase(unittest.TestCase):
         the program, won't be removed by env_remove.
       shell: {bool: bool}; optional; whether to use the shell as the program
         to execute
-      cwd: string; the current working dirctory, will be self._test_cwd if not
+      cwd: string; the current working directory, will be self._test_cwd if not
         specified.
       allow_failure: bool; if false, the function checks the return code is 0
       executable: string or None; executable program to run; use args[0]

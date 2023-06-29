@@ -17,6 +17,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.extensions.proto.ProtoTruth.assertThat;
 import static org.junit.Assert.assertThrows;
 
+import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.Subscribe;
 import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
@@ -48,6 +49,7 @@ public class MetricsCollectorTest extends BuildIntegrationTestCase {
   static class BuildMetricsEventListener extends BlazeModule {
 
     private BuildMetricsEvent event;
+    private EventBus eventBus;
 
     @Override
     public void beforeCommand(CommandEnvironment env) {
@@ -226,10 +228,17 @@ public class MetricsCollectorTest extends BuildIntegrationTestCase {
     // Do a null build. No useful analysis stats.
     buildTarget("//a");
 
+    // For null build, we don't do any conflict checking. As the metrics are collected during the
+    // traversal that's part of conflict checking, these analysis-related numbers are 0.
     assertThat(buildMetricsEventListener.event.getBuildMetrics().getBuildGraphMetrics())
-        .ignoringFieldAbsence()
         .isEqualTo(
             BuildGraphMetrics.newBuilder()
+                .setActionLookupValueCount(0)
+                .setActionLookupValueCountNotIncludingAspects(0)
+                .setActionCount(0)
+                .setActionCountNotIncludingAspects(0)
+                .setInputFileConfiguredTargetCount(0)
+                .setOutputArtifactCount(0)
                 .setPostInvocationSkyframeNodeCount(newGraphSize)
                 .build());
     assertThat(buildMetricsEventListener.event.getBuildMetrics().getArtifactMetrics())
@@ -591,5 +600,54 @@ public class MetricsCollectorTest extends BuildIntegrationTestCase {
     for (ActionData actionData : actionDataList) {
       assertThat(actionData.getFirstStartedMs()).isAtMost(actionData.getLastEndedMs());
     }
+  }
+
+  @Test
+  public void skymeldNullIncrementalBuild_buildGraphMetricsNotCollected() throws Exception {
+    write(
+        "foo/BUILD",
+        "genrule(",
+        "    name = 'foo',",
+        "    outs = ['dir'],",
+        "    cmd = '/bin/mkdir $(location dir)',",
+        "    srcs = [],",
+        ")",
+        "genrule(",
+        "    name = 'bar',",
+        "    outs = ['dir2'],",
+        "    cmd = '/bin/mkdir $(location dir2)',",
+        "    srcs = [],",
+        ")");
+    addOptions("--experimental_merged_skyframe_analysis_execution");
+    BuildGraphMetrics expected =
+        BuildGraphMetrics.newBuilder()
+            .setActionLookupValueCount(8)
+            .setActionLookupValueCountNotIncludingAspects(8)
+            .setActionCount(2)
+            .setActionCountNotIncludingAspects(2)
+            .setInputFileConfiguredTargetCount(1)
+            .setOutputArtifactCount(2)
+            .build();
+    buildTarget("//foo:foo", "//foo:bar");
+
+    assertThat(buildMetricsEventListener.event.getBuildMetrics().getBuildGraphMetrics())
+        .comparingExpectedFieldsOnly()
+        .isEqualTo(expected);
+
+    // Null build.
+    buildTarget("//foo:foo", "//foo:bar");
+
+    BuildGraphMetrics expectedNullBuild =
+        BuildGraphMetrics.newBuilder()
+            .setActionLookupValueCount(0)
+            .setActionLookupValueCountNotIncludingAspects(0)
+            .setActionCount(0)
+            .setActionCountNotIncludingAspects(0)
+            .setInputFileConfiguredTargetCount(0)
+            .setOutputArtifactCount(0)
+            .build();
+    assertThat(buildMetricsEventListener.event.getBuildMetrics().getBuildGraphMetrics())
+        .comparingExpectedFieldsOnly()
+        .isEqualTo(expectedNullBuild);
   }
 }

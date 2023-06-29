@@ -17,7 +17,6 @@ package com.google.devtools.build.lib.analysis.config;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableCollection;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
@@ -25,7 +24,7 @@ import com.google.common.collect.Interner;
 import com.google.devtools.build.lib.actions.ActionEnvironment;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.BuildConfigurationEvent;
-import com.google.devtools.build.lib.actions.CommandLines.CommandLineLimits;
+import com.google.devtools.build.lib.actions.CommandLineLimits;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.PlatformOptions;
 import com.google.devtools.build.lib.analysis.config.OutputDirectories.InvalidMnemonicException;
@@ -67,10 +66,10 @@ import net.starlark.java.eval.StarlarkThread;
  *
  * <p>A single build may require building tools to run on a variety of platforms: when compiling a
  * server application for production, we must build the build tools (like compilers) to run on the
- * host platform, but cross-compile the application for the production environment.
+ * execution platform, but cross-compile the application for the production environment.
  *
  * <p>There is always at least one {@code BuildConfigurationValue} instance in any build: the one
- * representing the host platform. Additional instances may be created, in a cross-compilation
+ * representing the target platform. Additional instances may be created, in a cross-compilation
  * build, for example.
  *
  * <p>Instances of {@code BuildConfigurationValue} are canonical:
@@ -78,7 +77,8 @@ import net.starlark.java.eval.StarlarkThread;
  * <pre>{@code c1.equals(c2) <=> c1==c2.}</pre>
  */
 @AutoCodec
-public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue {
+public class BuildConfigurationValue
+    implements BuildConfigurationApi, SkyValue, BuildConfigurationInfo {
 
   private static final Interner<ImmutableSortedMap<Class<? extends Fragment>, Fragment>>
       fragmentsInterner = BlazeInterners.newWeakInterner();
@@ -131,6 +131,8 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
 
   private final boolean siblingRepositoryLayout;
 
+  private final FeatureSet defaultFeatures;
+
   /**
    * Validates the options for this BuildConfigurationValue. Issues warnings for the use of
    * deprecated options, and warnings or errors for any option settings that conflict.
@@ -167,7 +169,10 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
       FragmentFactory fragmentFactory)
       throws InvalidConfigurationException {
 
-    FragmentClassSet fragmentClasses = globalProvider.getFragmentRegistry().getAllFragments();
+    FragmentClassSet fragmentClasses =
+        buildOptions.hasNoConfig()
+            ? FragmentClassSet.of(ImmutableSet.of())
+            : globalProvider.getFragmentRegistry().getAllFragments();
     ImmutableSortedMap<Class<? extends Fragment>, Fragment> fragments =
         getConfigurationFragments(buildOptions, fragmentClasses, fragmentFactory);
 
@@ -259,6 +264,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     this.reservedActionMnemonics = reservedActionMnemonics;
     this.buildEventSupplier = Suppliers.memoize(this::createBuildEvent);
     this.commandLineLimits = new CommandLineLimits(options.minParamFileSize);
+    this.defaultFeatures = FeatureSet.parse(options.defaultFeatures);
   }
 
   @Override
@@ -380,6 +386,13 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     return !outputDirectories.mergeGenfilesDirectory();
   }
 
+  @Override
+  public boolean hasSeparateGenfilesDirectoryForStarlark(StarlarkThread thread)
+      throws EvalException {
+    checkPrivateAccess(thread);
+    return hasSeparateGenfilesDirectory();
+  }
+
   /**
    * Returns the directory where coverage-related artifacts and metadata files should be stored.
    * This includes for example uninstrumented class files needed for Jacoco's coverage reporting
@@ -445,23 +458,21 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     return mainRepositoryName.getName();
   }
 
-  /**
-   * Returns the configuration-dependent string for this configuration.
-   *
-   * <p>This is also the name of the configuration's base output directory unless {@link
-   * #isHostConfiguration} is {@code true}, in which case the output directory is named {@code
-   * "host"}. See also {@link #getOutputDirectoryName}.
-   */
+  @Override
   public String getMnemonic() {
     return outputDirectories.getMnemonic();
+  }
+
+  /** Returns whether to use automatic exec groups. */
+  public boolean useAutoExecGroups() {
+    return options.useAutoExecGroups;
   }
 
   /**
    * Returns the name of the base output directory under which actions in this configuration write
    * their outputs.
    *
-   * <p>This is the same as {@link #getMnemonic} except in the host configuration, in which case it
-   * is {@code "host"}.
+   * <p>This is the same as {@link #getMnemonic}.
    */
   public String getOutputDirectoryName() {
     return outputDirectories.getOutputDirName();
@@ -483,6 +494,22 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
 
   public boolean isSiblingRepositoryLayout() {
     return siblingRepositoryLayout;
+  }
+
+  @Override
+  public boolean isSiblingRepositoryLayoutForStarlark(StarlarkThread thread) throws EvalException {
+    checkPrivateAccess(thread);
+    return isSiblingRepositoryLayout();
+  }
+
+  private static void checkPrivateAccess(StarlarkThread thread) throws EvalException {
+    RepositoryName repository =
+        BazelModuleContext.of(Module.ofInnermostEnclosingStarlarkFunction(thread))
+            .label()
+            .getRepository();
+    if (!"@_builtins".equals(repository.getNameWithAt())) {
+      throw Starlark.errorf("private API only for use in builtins");
+    }
   }
 
   /**
@@ -606,13 +633,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
 
   @Override
   public boolean stampBinariesForStarlark(StarlarkThread thread) throws EvalException {
-    RepositoryName repository =
-        BazelModuleContext.of(Module.ofInnermostEnclosingStarlarkFunction(thread))
-            .label()
-            .getRepository();
-    if (!"@_builtins".equals(repository.getNameWithAt())) {
-      throw Starlark.errorf("private API only for use in builtins");
-    }
+    checkPrivateAccess(thread);
     return stampBinaries();
   }
 
@@ -634,6 +655,13 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
   /** Returns if we are building external runfiles symlinks using the old-style structure. */
   public boolean legacyExternalRunfiles() {
     return options.legacyExternalRunfiles;
+  }
+
+  /**
+   * Returns true if Runfiles should merge in FilesToBuild from deps when collecting data runfiles.
+   */
+  public boolean alwaysIncludeFilesToBuildInData() {
+    return options.alwaysIncludeFilesToBuildInData;
   }
 
   /**
@@ -669,30 +697,19 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     return options.runUnder;
   }
 
-  /** Returns true if this is a host configuration. */
-  public boolean isHostConfiguration() {
-    return options.isHost;
-  }
-
   /** Returns true if this is an execution configuration. */
   public boolean isExecConfiguration() {
     return options.isExec;
   }
 
-  /** Returns true if this is an tool-related configuration. */
+  @Override
   public boolean isToolConfiguration() {
-    return isExecConfiguration() || isHostConfiguration();
+    return isExecConfiguration();
   }
 
   @Override
   public boolean isToolConfigurationForStarlark(StarlarkThread thread) throws EvalException {
-    RepositoryName repository =
-        BazelModuleContext.of(Module.ofInnermostEnclosingStarlarkFunction(thread))
-            .label()
-            .getRepository();
-    if (!"@_builtins".equals(repository.getNameWithAt())) {
-      throw Starlark.errorf("private API only for use in builtins");
-    }
+    checkPrivateAccess(thread);
     return isToolConfiguration();
   }
 
@@ -725,7 +742,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
   }
 
   public List<Label> getActionListeners() {
-    return options.actionListeners == null ? ImmutableList.of() : options.actionListeners;
+    return options.actionListeners;
   }
 
   /**
@@ -752,7 +769,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     return options.compilationMode;
   }
 
-  /** Returns the cache key of the build options used to create this configuration. */
+  @Override
   public String checksum() {
     return buildOptions.checksum();
   }
@@ -801,6 +818,12 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     return runfilesEnabled(this.options);
   }
 
+  @Override
+  public boolean runfilesEnabledForStarlark(StarlarkThread thread) throws EvalException {
+    checkPrivateAccess(thread);
+    return runfilesEnabled(this.options);
+  }
+
   public boolean inprocessSymlinkCreation() {
     return options.inprocessSymlinkCreation;
   }
@@ -832,9 +855,9 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     options.executionInfoModifier.apply(mnemonic, executionInfo);
   }
 
-  /** @return the list of default features used for all packages. */
-  public List<String> getDefaultFeatures() {
-    return options.defaultFeatures;
+  /** Returns the list of default features used for all packages. */
+  public FeatureSet getDefaultFeatures() {
+    return defaultFeatures;
   }
 
   /**
@@ -866,6 +889,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     return BuildEventIdUtil.configurationId(checksum());
   }
 
+  @Override
   public BuildConfigurationEvent toBuildEvent() {
     return buildEventSupplier.get();
   }

@@ -39,7 +39,10 @@ public final class RepositoryName {
 
   @SerializationConstant public static final RepositoryName MAIN = new RepositoryName("");
 
-  private static final Pattern VALID_REPO_NAME = Pattern.compile("[\\w\\-.~]*");
+  // Repository names must not start with a tilde as shells treat unescaped paths starting with them
+  // specially.
+  // https://www.gnu.org/software/bash/manual/html_node/Tilde-Expansion.html
+  private static final Pattern VALID_REPO_NAME = Pattern.compile("|[\\w\\-.][\\w\\-.~]*");
 
   // Must start with a letter. Can contain ASCII letters and digits, underscore, dash, and dot.
   private static final Pattern VALID_USER_PROVIDED_NAME = Pattern.compile("[a-zA-Z][-.\\w]*$");
@@ -156,7 +159,7 @@ public final class RepositoryName {
     if (!VALID_REPO_NAME.matcher(name).matches()) {
       throw LabelParser.syntaxErrorf(
           "invalid repository name '@%s': repo names may contain only A-Z, a-z, 0-9, '-', '_', '.'"
-              + " and '~'",
+              + " and '~' and must not start with '~'",
           StringUtilities.sanitizeControlChars(name));
     }
   }
@@ -194,9 +197,14 @@ public final class RepositoryName {
     return ownerRepoIfNotVisible == null;
   }
 
-  @Nullable
-  public RepositoryName getOwnerRepoIfNotVisible() {
-    return ownerRepoIfNotVisible;
+  // Must only be called if isVisible() returns true.
+  public String getOwnerRepoDisplayString() {
+    Preconditions.checkNotNull(ownerRepoIfNotVisible);
+    if (ownerRepoIfNotVisible.isMain()) {
+      return "main repository";
+    } else {
+      return String.format("repository '%s'", ownerRepoIfNotVisible.getNameWithAt());
+    }
   }
 
   /** Returns if this is the main repository. */
@@ -220,6 +228,45 @@ public final class RepositoryName {
   // TODO(bazel-team): Consider renaming to "getDefaultForm".
   public String getCanonicalForm() {
     return isMain() ? "" : getNameWithAt();
+  }
+
+  /**
+   * Returns the repository part of a {@link Label}'s string representation suitable for display.
+   * The returned string is as simple as possible in the context of the main repo whose repository
+   * mapping is provided: an empty string for the main repo, or a string prefixed with a leading
+   * "{@literal @}" or "{@literal @@}" otherwise.
+   *
+   * @param mainRepositoryMapping the {@link RepositoryMapping} of the main repository
+   * @return
+   *     <dl>
+   *       <dt>the empty string
+   *       <dd>if this is the main repository
+   *       <dt><code>@protobuf</code>
+   *       <dd>if this repository is a WORKSPACE dependency and its <code>name</code> is "protobuf",
+   *           or if this repository is a Bzlmod dependency of the main module and its apparent name
+   *           is "protobuf"
+   *       <dt><code>@@protobuf~3.19.2</code>
+   *       <dd>only with Bzlmod, if this a repository that is not visible from the main module
+   */
+  public String getDisplayForm(RepositoryMapping mainRepositoryMapping) {
+    Preconditions.checkArgument(
+        mainRepositoryMapping.ownerRepo() == null || mainRepositoryMapping.ownerRepo().isMain());
+    if (isMain()) {
+      // Packages in the main repository can always use repo-relative form.
+      return "";
+    }
+    if (!mainRepositoryMapping.usesStrictDeps()) {
+      // If the main repository mapping is not using strict visibility, then Bzlmod is certainly
+      // disabled, which means that canonical and apparent names can be used interchangeably from
+      // the context of the main repository.
+      return getNameWithAt();
+    }
+    // If possible, represent the repository with a non-canonical label using the apparent name the
+    // main repository has for it, otherwise fall back to a canonical label.
+    return mainRepositoryMapping
+        .getInverse(this)
+        .map(apparentName -> "@" + apparentName)
+        .orElse("@" + getNameWithAt());
   }
 
   /**
