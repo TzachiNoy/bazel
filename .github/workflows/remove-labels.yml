@@ -1,14 +1,11 @@
-name: "PR Labeler"
+name: Remove PR Labels
 
 on:
   pull_request_target:
-    types: ["opened", "reopened", "ready_for_review"]
-
-permissions:
-  contents: read
+    types: ["closed"]
 
 jobs:
-  triage:
+  remove-label:
     permissions:
       contents: read
       pull-requests: write
@@ -19,5 +16,8 @@ jobs:
       with:
         egress-policy: audit
 
-    - uses: actions/labeler@ba790c862c380240c6d5e7427be5ace9a05c754b # v4.0.3
-    if: ${{ github.event.pull_request.draft == false }}
+    - uses: actions-ecosystem/action-remove-labels@v1
+      with:
+        labels: |
+          awaiting-pr-merge
+          awaiting-review
